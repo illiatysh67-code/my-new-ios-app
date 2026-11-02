@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^cp '/home/codespace/\\.vscode-remote/data/agentSessionData/9c2197d4-9848-41b6-9f5d-0cb29eb30ac1/attachments/720f7e31-4dbb-4bd1-949f-cfcb1caedf0f/Pasted text #1\\.txt' App/IToolsViews\\.swift && cp '/home/codespace/\\.vscode-remote/data/agentSessionData/9c2197d4-9848-41b6-9f5d-0cb29eb30ac1/attachments/d949c204-a02d-4025-92d2-dd1631014645/Pasted text #2\\.txt' App/IToolsSources\\.swift && cp '/home/codespace/\\.vscode-remote/data/agentSessionData/9c2197d4-9848-41b6-9f5d-0cb29eb30ac1/attachments/7a343831-7388-468e-8200-3e5097a1b1f0/Pasted text #3\\.txt' App/IToolsSupport\\.swift$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

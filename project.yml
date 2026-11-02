@@ -1,19 +1,25 @@
-name: Storefront
+name: iTools
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
     iOS: "16.0"
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.19
 targets:
-  Storefront:
+  iTools:
     type: application
     platform: iOS
+    dependencies:
+      - package: ZIPFoundation
     sources:
       - path: App
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.storefront
-        PRODUCT_NAME: Storefront
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.itools
+        PRODUCT_NAME: iTools
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Storefront
+        INFOPLIST_KEY_CFBundleDisplayName: iTools
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"

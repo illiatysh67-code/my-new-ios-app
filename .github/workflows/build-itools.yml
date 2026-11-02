@@ -1,4 +1,4 @@
-name: Build unsigned iOS IPA
+name: Build iTools
 
 on:
   workflow_dispatch:
@@ -18,27 +18,30 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Build unsigned app
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project iTools.xcodeproj -scheme iTools
+
+      - name: Build unsigned iOS app
         run: >-
           xcodebuild
-          -project Storefront.xcodeproj
-          -scheme Storefront
+          -project iTools.xcodeproj
+          -scheme iTools
           -configuration Release
           -sdk iphoneos
           -derivedDataPath build
           CODE_SIGNING_ALLOWED=NO
           build
 
-      - name: Package IPA
+      - name: Package unsigned IPA
         run: |
-          APP_PATH="build/Build/Products/Release-iphoneos/Storefront.app"
+          APP_PATH="build/Build/Products/Release-iphoneos/iTools.app"
           test -d "$APP_PATH"
-          mkdir Payload
+          mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          ditto -c -k --sequesterRsrc --keepParent Payload Storefront-unsigned.ipa
+          ditto -c -k --sequesterRsrc --keepParent Payload iTools-unsigned.ipa
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Storefront-unsigned-ipa
-          path: Storefront-unsigned.ipa
+          name: iTools-unsigned-ipa
+          path: iTools-unsigned.ipa
           if-no-files-found: error
