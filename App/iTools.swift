@@ -694,62 +694,106 @@ struct ITUploadAppView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("App information") {
-                    TextField("App name", text: $name)
-                    TextField("Description", text: $description, axis: .vertical)
-                }
-                Section("Files") {
-                    Button { showingIPA = true } label: {
-                        Label(ipaName.isEmpty ? "Choose IPA file" : ipaName,
-                              systemImage: "doc.zipper")
-                    }
-                    Button { showingIcon = true } label: {
-                        Label(iconData == nil ? "Choose app icon image" : "Icon selected",
-                              systemImage: "photo")
-                    }
-                }
-                Button {
-                    guard let ipaData else { return }
-                    busy = true
-                    Task {
-                        await cloud.publishApp(repoID: repo.id, name: name,
-                                               description: description,
-                                               ipaData: ipaData, ipaName: ipaName,
-                                               iconData: iconData)
-                        busy = false
-                        dismiss()
-                    }
-                } label: {
-                    HStack {
-                        if busy { ProgressView() }
-                        Text("Publish app")
-                    }
-                }
-                .disabled(name.isEmpty || ipaData == nil || cloud.token == nil || busy)
+                appInformationSection
+                fileSelectionSection
+                publishButton
             }
             .navigationTitle("Upload app")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
             .fileImporter(isPresented: $showingIPA,
-                          allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data]) { result in
-                do {
-                    guard let url = try result.get().first else { return }
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    ipaData = try Data(contentsOf: url)
-                    ipaName = url.lastPathComponent
-                } catch { cloud.message = error.localizedDescription }
-            }
+                          allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data],
+                          onCompletion: importIPA)
             .fileImporter(isPresented: $showingIcon,
-                          allowedContentTypes: [.image]) { result in
-                do {
-                    guard let url = try result.get().first else { return }
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    guard let image = UIImage(data: try Data(contentsOf: url)),
-                          let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
-                    iconData = jpeg
-                } catch { cloud.message = error.localizedDescription }
+                          allowedContentTypes: [.image],
+                          onCompletion: importIcon)
+        }
+    }
+
+    private var appInformationSection: some View {
+        Section("App information") {
+            TextField("App name", text: $name)
+            TextField("Description", text: $description, axis: .vertical)
+        }
+    }
+
+    private var fileSelectionSection: some View {
+        Section("Files") {
+            Button { showingIPA = true } label: {
+                Label(ipaName.isEmpty ? "Choose IPA file" : ipaName,
+                      systemImage: "doc.zipper")
             }
+            Button { showingIcon = true } label: {
+                Label(iconData == nil ? "Choose app icon image" : "Icon selected",
+                      systemImage: "photo")
+            }
+        }
+    }
+
+    private var publishButton: some View {
+        Button(action: publishApp) {
+            HStack {
+                if busy { ProgressView() }
+                Text("Publish app")
+            }
+        }
+        .disabled(name.isEmpty || ipaData == nil || cloud.token == nil || busy)
+    }
+
+    private func publishApp() {
+        guard let ipaData else { return }
+        busy = true
+        Task {
+            await cloud.publishApp(
+                repoID: repo.id,
+                name: name,
+                description: description,
+                ipaData: ipaData,
+                ipaName: ipaName,
+                iconData: iconData
+            )
+            busy = false
+            dismiss()
+        }
+    }
+
+    private func importIPA(_ result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let access = url.startAccessingSecurityScopedResource()
+            defer {
+                if access {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            ipaData = try Data(contentsOf: url)
+            ipaName = url.lastPathComponent
+        } catch {
+            cloud.message = error.localizedDescription
+        }
+    }
+
+    private func importIcon(_ result: Result<URL, Error>) {
+        do {
+            let url = try result.get()
+            let access = url.startAccessingSecurityScopedResource()
+            defer {
+                if access {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            guard let image = UIImage(data: try Data(contentsOf: url)),
+                  let jpeg = image.jpegData(compressionQuality: 0.85) else {
+                throw NSError(
+                    domain: "iTools",
+                    code: 4,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "The selected icon image could not be read."
+                    ]
+                )
+            }
+            iconData = jpeg
+        } catch {
+            cloud.message = error.localizedDescription
         }
     }
 }
@@ -839,7 +883,7 @@ struct ITScannerView: View {
         .fileImporter(isPresented: $showingPicker,
                       allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data]) { result in
             do {
-                guard let url = try result.get().first else { return }
+                let url = try result.get()
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
                 let data = try Data(contentsOf: url)
