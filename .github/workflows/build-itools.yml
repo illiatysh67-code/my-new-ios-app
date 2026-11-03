@@ -18,9 +18,6 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Resolve Swift packages
-        run: xcodebuild -resolvePackageDependencies -project iTools.xcodeproj -scheme iTools
-
       - name: Build unsigned iOS app
         run: >-
           xcodebuild

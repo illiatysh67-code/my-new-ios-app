@@ -1,14 +1,18 @@
 # iTools
 
-An iOS app library for discovering apps, checking GitHub releases, and inspecting IPA metadata.
-The deployment target is iOS 16.0.
+An iOS 16+ app for exploring tools and community repositories, sharing IPA files with a compatible sideloading app, and checking basic IPA indicators. The app icon is in `App/Assets.xcassets`.
 
-## Download an unsigned IPA
+## Build an unsigned IPA on GitHub
 
-The **Build iTools** GitHub Actions workflow builds the app on macOS whenever code is pushed to `main`.
-To start a build manually, open the repository's **Actions** tab, choose **Build iTools**, and select **Run workflow**. When the run completes, download the `iTools-unsigned-ipa` artifact.
+The **Build iTools** GitHub Actions workflow runs when changes are pushed to `main`. To run it manually, open the repository's **Actions** tab, choose **Build iTools**, and select **Run workflow**. Download the `iTools-unsigned-ipa` artifact when the build completes.
 
-The IPA is unsigned and cannot be installed directly on a standard iPhone. It must be signed with a valid Apple provisioning profile before installation.
+The IPA is unsigned. Sign it with an authorized signing method before installing it on a device.
+
+## Configure Supabase
+
+The account and community repository features require a Supabase project. Set `supabaseURL` and the public anon key in `ITConfig` in `App/iTools.swift`, then run the setup SQL at the bottom of that file in the Supabase SQL Editor. Do not put a service-role key or account password in the app.
+
+The built-in Nyxian and LiveContainer + SideStore entries also expect `Nyxian.ipa` and `LiveContainer+SideStore.ipa` to be added to the app target's Copy Bundle Resources. Those IPA files are not included in this repository.
 
 ## Local build
 
