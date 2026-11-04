@@ -299,7 +299,7 @@ struct iToolsApp: App {
     @StateObject private var cloud = ITCloud()
     var body: some Scene {
         WindowGroup {
-            ITMainView()
+            RootView()
                 .environmentObject(cloud)
                 .preferredColorScheme(.dark)
                 .tint(.cyan)
