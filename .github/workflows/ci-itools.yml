@@ -5,11 +5,12 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
 
 jobs:
   validate:
-    runs-on: macos-13
-    timeout-minutes: 20
+    runs-on: macos-14
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -17,21 +18,19 @@ jobs:
 
       - name: Install XcodeGen
         run: |
-          brew update --quiet
-          HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet xcodegen
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          brew install xcodegen
 
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: Verify project loads
-        run: xcodebuild -list -project iTools.xcodeproj
-
       - name: Build for iOS Simulator
-        run: >-
-          xcodebuild
-          -project iTools.xcodeproj
-          -scheme iTools
-          -destination 'platform=iOS Simulator,name=iPhone 16'
-          -configuration Debug
-          CODE_SIGNING_ALLOWED=NO
-          build
+        run: |
+          xcodebuild \
+            -project iTools.xcodeproj \
+            -scheme iTools \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build
