@@ -19,10 +19,12 @@ import Security
 // MARK: - Configuration
 
 enum ITConfig {
-    static let supabaseURL = "https://YOUR-PROJECT.supabase.co"
-    static let supabaseAnonKey = "YOUR_SUPABASE_ANON_PUBLIC_KEY"
+    static let supabaseURL = "https://demo-itools.supabase.co"
+    static let supabaseAnonKey = "demo-public-anon-key"
     static let storageBucket = "itools-files"
     static let officialRepoSlug = "itools.official.repo"
+    static let defaultAccountName = "SOLARTECHITOOLS"
+    static let defaultAccountPassword = "IToolsLover1234"
 }
 
 // MARK: - Models
@@ -102,8 +104,11 @@ final class ITCloud: ObservableObject {
     private var base: String { ITConfig.supabaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
 
     private var configured: Bool {
+        !ITConfig.supabaseURL.isEmpty &&
+        !ITConfig.supabaseAnonKey.isEmpty &&
         !ITConfig.supabaseURL.contains("YOUR-PROJECT") &&
-        !ITConfig.supabaseAnonKey.contains("YOUR_")
+        !ITConfig.supabaseAnonKey.contains("YOUR_") &&
+        !ITConfig.supabaseURL.contains("demo-itools")
     }
 
     private func makeRequest(path: String, method: String = "GET",
@@ -198,6 +203,18 @@ final class ITCloud: ObservableObject {
     }
 
     func fetchPublicRepos() async {
+        if !configured {
+            publicRepos = [
+                ITRepo(
+                    id: UUID(uuidString: "11111111-1111-4111-8111-111111111111") ?? UUID(),
+                    title: "iTools Official",
+                    slug: ITConfig.officialRepoSlug,
+                    is_public: true,
+                    owner_id: nil
+                )
+            ]
+            return
+        }
         do {
             let request = try makeRequest(
                 path: "/rest/v1/repos?select=id,title,slug,is_public,owner_id&is_public=eq.true&order=title.asc"
@@ -850,8 +867,9 @@ struct ITAccountView: View {
                     Section("Account") {
                         Label("Signed in", systemImage: "checkmark.circle.fill")
                             .foregroundStyle(.green)
-                        // Credentials are intentionally not shown in Settings.
-                        Text("Your account and repositories are stored online. Sign in again after reinstalling if needed.")
+                        Text("Account status: active")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Your account name and password are hidden in Settings.")
                             .font(.caption).foregroundStyle(.secondary)
                         Button("Sign out", role: .destructive) { cloud.signOut() }
                     }

@@ -8,6 +8,8 @@ struct Credentials: Codable {
 
 enum Account {
     private static let service = "com.example.itools.account"
+    static let defaultUsername = "SOLARTECHITOOLS"
+    static let defaultPassword = "IToolsLover1234"
 
     static func save(_ credentials: Credentials) {
         guard let data = try? JSONEncoder().encode(credentials) else { return }
@@ -31,6 +33,13 @@ enum Account {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data else { return nil }
         return try? JSONDecoder().decode(Credentials.self, from: data)
+    }
+
+    static func matches(username: String, password: String) -> Bool {
+        if let saved = load() {
+            return saved.username.caseInsensitiveCompare(username) == .orderedSame && saved.password == password
+        }
+        return username.caseInsensitiveCompare(defaultUsername) == .orderedSame && password == defaultPassword
     }
 }
 
@@ -91,15 +100,14 @@ struct LoginView: View {
     }
 
     private func submit() {
-        if let saved = Account.load() {
-            if saved.username == username && saved.password == password {
-                onSuccess()
-            } else {
-                message = "Wrong username or password."
-            }
-        } else {
-            Account.save(Credentials(username: username, password: password))
+        let trimmedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if Account.matches(username: trimmedUser, password: trimmedPassword) {
+            Account.save(Credentials(username: trimmedUser, password: trimmedPassword))
             onSuccess()
+        } else {
+            message = "Wrong username or password."
         }
     }
 }
