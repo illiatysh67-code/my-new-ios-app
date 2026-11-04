@@ -19,12 +19,10 @@ import Security
 // MARK: - Configuration
 
 enum ITConfig {
-    static let supabaseURL = "https://demo-itools.supabase.co"
-    static let supabaseAnonKey = "demo-public-anon-key"
+    static let supabaseURL = ""
+    static let supabaseAnonKey = ""
     static let storageBucket = "itools-files"
     static let officialRepoSlug = "itools.official.repo"
-    static let defaultAccountName = "SOLARTECHITOOLS"
-    static let defaultAccountPassword = "IToolsLover1234"
 }
 
 // MARK: - Models
@@ -107,8 +105,7 @@ final class ITCloud: ObservableObject {
         !ITConfig.supabaseURL.isEmpty &&
         !ITConfig.supabaseAnonKey.isEmpty &&
         !ITConfig.supabaseURL.contains("YOUR-PROJECT") &&
-        !ITConfig.supabaseAnonKey.contains("YOUR_") &&
-        !ITConfig.supabaseURL.contains("demo-itools")
+        !ITConfig.supabaseAnonKey.contains("YOUR_")
     }
 
     private func makeRequest(path: String, method: String = "GET",

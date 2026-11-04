@@ -8,8 +8,6 @@ struct Credentials: Codable {
 
 enum Account {
     private static let service = "com.example.itools.account"
-    static let defaultUsername = "SOLARTECHITOOLS"
-    static let defaultPassword = "IToolsLover1234"
 
     static func save(_ credentials: Credentials) {
         guard let data = try? JSONEncoder().encode(credentials) else { return }
@@ -36,10 +34,17 @@ enum Account {
     }
 
     static func matches(username: String, password: String) -> Bool {
+        guard let saved = load() else { return false }
+        return saved.username.caseInsensitiveCompare(username) == .orderedSame && saved.password == password
+    }
+
+    static func createIfNeeded(username: String, password: String) -> Bool {
         if let saved = load() {
             return saved.username.caseInsensitiveCompare(username) == .orderedSame && saved.password == password
         }
-        return username.caseInsensitiveCompare(defaultUsername) == .orderedSame && password == defaultPassword
+
+        save(Credentials(username: username, password: password))
+        return true
     }
 }
 
@@ -103,8 +108,7 @@ struct LoginView: View {
         let trimmedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if Account.matches(username: trimmedUser, password: trimmedPassword) {
-            Account.save(Credentials(username: trimmedUser, password: trimmedPassword))
+        if Account.createIfNeeded(username: trimmedUser, password: trimmedPassword) {
             onSuccess()
         } else {
             message = "Wrong username or password."
