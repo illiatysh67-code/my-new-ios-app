@@ -17,7 +17,8 @@ enum ITConfig {
     static let catalogPath = "sources.json"
     static let appsPath = "itools-apps.json"
     static let buildsURL = "https://github.com/illiatysh67-code/my-new-ios-app/actions/workflows/ci-itools.yml"
-    static let nyxianTutorial = "https://github.com/search?q=Nyxian+iOS+tutorial&type=repositories"
+    static let nyxianDownload = "https://drive.google.com/drive/u/6/folders/1NxwSVGQjBhigWdP7gMhC_5G6LgBCFoOU"
+    static let combinedTutorial = "https://livecontainer.github.io/docs/installation/lc_sidestore"
 }
 
 // MARK: - Models
@@ -486,8 +487,8 @@ struct ITBuiltinApp: Identifiable {
     let tutorial: String?
 
     static let all: [ITBuiltinApp] = [
-        .init(id: "sidestore", name: "SideStore", subtitle: "Sideloading and app refresh",
-              detail: "SideStore lets you sideload compatible apps. Follow its official setup instructions for your device and iOS version.",
+          .init(id: "sidestore", name: "SideStore", subtitle: "Sideload and refresh apps",
+              detail: "SideStore is a sideloading tool. Use its official releases and setup documentation.",
               icon: "SideStore", ipaResource: nil,
               web: "https://github.com/SideStore/SideStore/releases", tutorial: "https://sidestore.io/"),
         .init(id: "altstore", name: "AltStore", subtitle: "Alternative app sideloading",
@@ -497,13 +498,13 @@ struct ITBuiltinApp: Identifiable {
               detail: "LiveContainer provides a container environment for running compatible iOS apps. Check its documentation for compatibility.",
               icon: "LiveContainer", ipaResource: nil,
               web: "https://github.com/LiveContainer/LiveContainer/releases", tutorial: "https://github.com/LiveContainer/LiveContainer"),
-        .init(id: "combined", name: "LiveContainer + SideStore", subtitle: "Combined app entry",
-              detail: "A combined listing for LiveContainer and SideStore. Both apps remain separate and need their own setup.",
-              icon: "combined", ipaResource: "LiveContainer+SideStore", web: nil,
-              tutorial: "https://github.com/SideStore/SideStore/wiki"),
-        .init(id: "nyxian", name: "Nyxian", subtitle: "Included Nyxian IPA",
-              detail: "Nyxian compatibility depends on the exact IPA and iOS release. Check the included IPA's minimum iOS requirement before using it.",
-              icon: "Nyxian", ipaResource: "Nyxian", web: nil, tutorial: ITConfig.nyxianTutorial)
+          .init(id: "combined", name: "LiveContainer + SideStore", subtitle: "Install and configure both together",
+              detail: "Use the combined installation guide. The two apps remain separate and both need setup.",
+              icon: "Combined", ipaResource: "LiveContainer+SideStore", web: nil,
+              tutorial: ITConfig.combinedTutorial),
+          .init(id: "nyxian", name: "Nyxian", subtitle: "Nyxian IPA and installation guide",
+              detail: "Download the Nyxian IPA from the supplied Google Drive folder, then follow the installation instructions below.",
+              icon: "Nyxian", ipaResource: "Nyxian", web: ITConfig.nyxianDownload, tutorial: nil)
     ]
 }
 
@@ -523,15 +524,33 @@ struct ITBuiltinRow: View {
 struct ITAppIcon: View {
     let name: String
     var size: CGFloat = 56
+
+    private var fallbackSymbol: String {
+        switch name {
+        case "SideStore": "arrow.down.app.fill"
+        case "AltStore": "storefront.fill"
+        case "LiveContainer": "shippingbox.fill"
+        case "Nyxian": "bolt.shield.fill"
+        default: "square.stack.3d.up.fill"
+        }
+    }
+
     var body: some View {
         Group {
-            if name == "combined" {
+            if name == "Combined" && UIImage(named: "LiveContainer") != nil && UIImage(named: "SideStore") != nil {
                 HStack(spacing: 0) {
                     Image("LiveContainer").resizable().scaledToFill().frame(width: size / 2, height: size)
                     Image("SideStore").resizable().scaledToFill().frame(width: size / 2, height: size)
-                }.clipped()
-            } else {
+                }
+                .clipped()
+            } else if UIImage(named: name) != nil {
                 Image(name).resizable().scaledToFill()
+            } else {
+                Image(systemName: fallbackSymbol)
+                    .font(.system(size: size * 0.48, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                    .frame(width: size, height: size)
+                    .background(.cyan.opacity(0.13))
             }
         }
         .frame(width: size, height: size)
@@ -558,8 +577,24 @@ struct ITBuiltinDetail: View {
                     Link("Open tutorial / setup guide", destination: url)
                 }
                 if app.id == "nyxian" {
-                    Text("If Get reports that Nyxian.ipa is missing, add Nyxian.ipa to the Xcode target's Copy Bundle Resources.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Share the supplied Nyxian IPA from this app") {
+                        if let file = Bundle.main.url(forResource: "Nyxian", withExtension: "ipa") {
+                            shareItems = [file]
+                            showShare = true
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Nyxian install guide").font(.title2.bold())
+                        Text("Method 1: Sideloading using SideStore or AltStore").font(.headline)
+                        Text("1. Sideload Nyxian.ipa onto your device.\n2. Follow the signing and installation instructions in SideStore or AltStore.")
+                        Text("Method 2: Use your own paid Apple Developer certificate").font(.headline)
+                        Text("Use only a certificate and provisioning profile you are authorized to use. Import them into a trusted signing tool, sign Nyxian.ipa, and install it.")
+                    }
+                    .font(.callout)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
                 }
                 Text("iOS does not allow ordinary apps to silently install IPA files. Get opens the share sheet so you can save or open the IPA in a compatible sideloading tool.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -571,18 +606,16 @@ struct ITBuiltinDetail: View {
     }
 
     private func get() {
+        if app.id == "nyxian", let url = URL(string: ITConfig.nyxianDownload) {
+            UIApplication.shared.open(url)
+            return
+        }
         if let resource = app.ipaResource,
            let url = Bundle.main.url(forResource: resource, withExtension: "ipa") {
             shareItems = [url]
             showShare = true
         } else if app.id == "combined" {
-            let urls = ["LiveContainer", "SideStore"].compactMap {
-                Bundle.main.url(forResource: $0, withExtension: "ipa")
-            }
-            if !urls.isEmpty {
-                shareItems = urls
-                showShare = true
-            } else if let url = URL(string: app.tutorial ?? "https://github.com") {
+            if let url = URL(string: app.tutorial ?? ITConfig.combinedTutorial) {
                 UIApplication.shared.open(url)
             }
         } else if let web = app.web, let url = URL(string: web) {
