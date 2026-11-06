@@ -6,6 +6,7 @@
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import PhotosUI
 import Security
 
 // MARK: - Configuration
@@ -415,12 +416,13 @@ extension JSONEncoder {
 @main
 struct iToolsApp: App {
     @StateObject private var store = ITStore()
+    @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
     var body: some Scene {
         WindowGroup {
             ITMainView()
                 .environmentObject(store)
                 .preferredColorScheme(.dark)
-                .tint(.cyan)
+                .tint(Color(hex: accentHex))
         }
     }
 }
@@ -446,6 +448,9 @@ struct ITMainView: View {
 
 struct ITHomeView: View {
     @EnvironmentObject var store: ITStore
+    @AppStorage("itools.bannerHex") private var bannerHex = "#1687FF"
+    @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
+    @AppStorage("itools.backgroundHex") private var backgroundHex = "#101827"
     var body: some View {
         NavigationStack {
             List {
@@ -453,6 +458,19 @@ struct ITHomeView: View {
                     Text("iTools").font(.largeTitle.bold())
                     Text("Apps, GitHub repositories and community sources.")
                         .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Image(systemName: "sparkles.rectangle.stack.fill")
+                            .font(.system(size: 28)).foregroundStyle(.white)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Discover apps with iTools").font(.headline).foregroundStyle(.white)
+                            Text("Browse sources, download IPAs and follow setup guides.")
+                                .font(.caption).foregroundStyle(.white.opacity(0.85))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(hex: bannerHex), in: RoundedRectangle(cornerRadius: 12))
                 }
                 Section("Featured apps") {
                     ForEach(ITBuiltinApp.all) { app in
@@ -471,8 +489,12 @@ struct ITHomeView: View {
                 Section("Device") {
                     Label(store.deviceSummary, systemImage: "iphone")
                 }
-            }.navigationTitle("Home")
+            }
+            .scrollContentBackground(.hidden)
+            .background(Color(hex: backgroundHex))
+            .navigationTitle("Home")
         }
+        .tint(Color(hex: accentHex))
     }
 }
 
@@ -654,11 +676,30 @@ struct ITAppsView: View {
 
 struct ITSourcesView: View {
     @EnvironmentObject var store: ITStore
+    @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
     @State private var showAdd = false
     @State private var showCreate = false
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                            Text("BETA FEATURE").font(.caption.bold()).foregroundStyle(.red)
+                            Spacer()
+                            Text("BETA")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.red.opacity(0.16), in: Capsule())
+                                .foregroundStyle(.red)
+                        }
+                        Text("Sources are in beta and may not work as expected. We're working to improve them.")
+                            .font(.footnote)
+                    }
+                    .padding(.vertical, 5)
+                    .listRowBackground(Color.red.opacity(0.09))
+                }
                 Section("Repositories") {
                     ForEach(store.repos) { repo in
                         NavigationLink { ITRepositoryView(repo: repo) } label: {
@@ -694,6 +735,7 @@ struct ITSourcesView: View {
             .sheet(isPresented: $showAdd) { ITAddSourceSheet() }
             .sheet(isPresented: $showCreate) { ITCreateGitHubRepoSheet() }
         }
+        .tint(Color(hex: accentHex))
     }
 }
 
@@ -807,25 +849,32 @@ struct ITUploadAppSheet: View {
     let repo: GitHubRepo
     @State private var name = ""
     @State private var details = ""
-    @State private var version = ""
+    @State private var version = "1.0.1"
     @State private var ipaData: Data?
     @State private var iconData: Data?
     @State private var ipaName = "Choose IPA file"
     @State private var makeRelease = false
     @State private var showIPA = false
-    @State private var showIcon = false
+    @State private var selectedIcon: PhotosPickerItem?
     var body: some View {
         NavigationStack {
             Form {
                 Section("App details") {
                     TextField("App name", text: $name)
                     TextField("Description", text: $details, axis: .vertical)
-                    TextField("Version (optional)", text: $version)
+                    TextField("Version number", text: $version)
+                        .keyboardType(.numbersAndPunctuation)
                 }
                 Section("Files") {
                     Button { showIPA = true } label: { Label(ipaName, systemImage: "doc.zipper") }
-                    Button { showIcon = true } label: {
-                        Label(iconData == nil ? "Add app logo (optional)" : "Logo selected", systemImage: "photo")
+                    PhotosPicker(selection: $selectedIcon, matching: .images, photoLibrary: .shared()) {
+                        Label(iconData == nil ? "Choose app icon from Photos" : "Change selected app icon",
+                              systemImage: "photo")
+                    }
+                    if let iconData, let image = UIImage(data: iconData) {
+                        Image(uiImage: image)
+                            .resizable().scaledToFit().frame(width: 76, height: 76)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                 }
                 Section("GitHub Releases") {
@@ -858,13 +907,19 @@ struct ITUploadAppSheet: View {
                     ipaName = url.lastPathComponent
                 } catch { store.message = error.localizedDescription }
             }
-            .fileImporter(isPresented: $showIcon, allowedContentTypes: [.image]) { result in
-                do {
-                    let url = try result.get()
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    iconData = try Data(contentsOf: url)
-                } catch { store.message = error.localizedDescription }
+            .onChange(of: selectedIcon) { item in
+                guard let item else { return }
+                Task {
+                    do {
+                        if let data = try await item.loadTransferable(type: Data.self),
+                           let image = UIImage(data: data),
+                           let jpeg = image.jpegData(compressionQuality: 0.85) {
+                            iconData = jpeg
+                        }
+                    } catch {
+                        store.message = error.localizedDescription
+                    }
+                }
             }
         }
     }
@@ -872,6 +927,9 @@ struct ITUploadAppSheet: View {
 
 struct ITSettingsView: View {
     @EnvironmentObject var store: ITStore
+    @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
+    @AppStorage("itools.bannerHex") private var bannerHex = "#1687FF"
+    @AppStorage("itools.backgroundHex") private var backgroundHex = "#101827"
     @State private var username = ""
     @State private var password = ""
     @State private var createAccount = false
@@ -912,6 +970,25 @@ struct ITSettingsView: View {
                     Text("Use a token with the repository permissions required for your actions. The token is stored in Keychain. GitHub does not accept normal account passwords for API access.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Appearance") {
+                    ColorPicker("Accent colour", selection: Binding(
+                        get: { Color(hex: accentHex) },
+                        set: { accentHex = $0.hexString ?? "#1687FF" }
+                    ), supportsOpacity: false)
+                    ColorPicker("App banner colour", selection: Binding(
+                        get: { Color(hex: bannerHex) },
+                        set: { bannerHex = $0.hexString ?? "#1687FF" }
+                    ), supportsOpacity: false)
+                    ColorPicker("Background colour", selection: Binding(
+                        get: { Color(hex: backgroundHex) },
+                        set: { backgroundHex = $0.hexString ?? "#101827" }
+                    ), supportsOpacity: false)
+                    Button("Reset appearance to default blue") {
+                        accentHex = "#1687FF"
+                        bannerHex = "#1687FF"
+                        backgroundHex = "#101827"
+                    }
+                }
                 Section("Device") {
                     Label(store.deviceSummary, systemImage: "iphone")
                     Button("Refresh device information") { store.refreshDeviceSummary() }
@@ -927,7 +1004,31 @@ struct ITSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color(hex: backgroundHex))
             .navigationTitle("Settings")
         }
+        .tint(Color(hex: accentHex))
+    }
+}
+
+extension Color {
+    init(hex: String) {
+        let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        let value = UInt64(cleaned, radix: 16) ?? 0x1687FF
+        self.init(.sRGB,
+                  red: Double((value >> 16) & 0xFF) / 255,
+                  green: Double((value >> 8) & 0xFF) / 255,
+                  blue: Double(value & 0xFF) / 255,
+                  opacity: 1)
+    }
+
+    var hexString: String? {
+        let components = UIColor(self).cgColor.components
+        guard let components, components.count >= 3 else { return nil }
+        let red = Int(components[0] * 255)
+        let green = Int(components[1] * 255)
+        let blue = Int(components[2] * 255)
+        return String(format: "#%02X%02X%02X", red, green, blue)
     }
 }
