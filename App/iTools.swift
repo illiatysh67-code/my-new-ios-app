@@ -620,7 +620,7 @@ struct ITBuiltinDetail: View {
             }
         } else if let web = app.web, let url = URL(string: web) {
             UIApplication.shared.open(url)
-        } else if let url = URL(string: app.tutorial ?? ITConfig.nyxianTutorial) {
+        } else if let url = URL(string: app.tutorial ?? ITConfig.nyxianDownload) {
             UIApplication.shared.open(url)
         }
     }
