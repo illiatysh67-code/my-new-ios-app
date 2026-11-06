@@ -1,320 +1,423 @@
-// iTools.swift — iOS 16+
-// Add these two IPA files to your Xcode target's Copy Bundle Resources,
-// renaming them exactly:
-//   Nyxian.ipa
-//   LiveContainer+SideStore.ipa
-//
-// Add your own Supabase project URL and anon/public key below.
-// Never put a service-role key or account password in this app.
-//
-// Required Supabase setup SQL is included at the bottom of this file.
+// iTools - iOS 16+
+// Add SideStore.png, AltStore.png, LiveContainer.png and Nyxian.png to the asset catalog.
+// Add Nyxian.ipa if the bundled Nyxian download is desired.
+// Never put a GitHub token or shared password in the app binary.
 
-import Foundation
 import SwiftUI
-import Combine
-import UniformTypeIdentifiers
 import UIKit
+import UniformTypeIdentifiers
 import Security
 
 // MARK: - Configuration
 
 enum ITConfig {
-    static let supabaseURL = ""
-    static let supabaseAnonKey = ""
-    static let storageBucket = "itools-files"
-    static let officialRepoSlug = "itools.official.repo"
+    static let officialOwner = "SolarTechiTools"
+    static let officialRepository = "iTools"
+    static let officialSlug = "itools.official.repo"
+    static let catalogPath = "sources.json"
+    static let appsPath = "itools-apps.json"
+    static let buildsURL = "https://github.com/illiatysh67-code/my-new-ios-app/actions/workflows/ci-itools.yml"
+    static let nyxianTutorial = "https://github.com/search?q=Nyxian+iOS+tutorial&type=repositories"
 }
 
 // MARK: - Models
 
-struct ITTool: Identifiable {
-    let id: String
+struct GitHubRepo: Codable, Identifiable, Hashable {
+    var id: String { fullName.lowercased() }
+    var fullName: String { "\(owner)/\(repo)" }
     let name: String
-    let subtitle: String
-    let description: String
-    let symbol: String
-    let localIPA: String?
-    let webURL: String?
+    let htmlURL: String
+    let owner: String
+    let repo: String
+    var isOfficial: Bool = false
 
-    static let all: [ITTool] = [
-        .init(id: "livecontainer", name: "LiveContainer",
-              subtitle: "Run compatible apps in a container",
-              description: "A container environment for running compatible iOS apps. Check the project's documentation for supported versions and setup.",
-              symbol: "shippingbox.fill", localIPA: nil,
-              webURL: "https://github.com/LiveContainer/LiveContainer/releases"),
-        .init(id: "sidestore", name: "SideStore",
-              subtitle: "Sideload and refresh apps",
-              description: "A sideloading tool with its own setup and refresh process. Follow the official guide for your iOS version.",
-              symbol: "arrow.down.app.fill", localIPA: nil,
-              webURL: "https://github.com/SideStore/SideStore/releases"),
-        .init(id: "combined", name: "LiveContainer + SideStore",
-              subtitle: "Combined setup",
-              description: "A guide and IPA entry for using LiveContainer and SideStore together. They remain separate apps and need their own setup.",
-              symbol: "square.stack.3d.up.fill",
-              localIPA: "LiveContainer+SideStore", webURL: nil),
-        .init(id: "nyxian", name: "Nyxian IPA",
-              subtitle: "Your included Nyxian IPA",
-              description: "Nyxian is presented as a LiveContainer-based, jailbreak-like experience, not a traditional jailbreak. Compatibility depends on the exact release. The included IPA reports a minimum iOS version of 18.0.",
-              symbol: "bolt.shield.fill", localIPA: "Nyxian", webURL: nil),
-        .init(id: "altstore", name: "AltStore",
-              subtitle: "Alternative app sideloading",
-              description: "Install compatible apps through AltStore's supported process. See the official site for current requirements.",
-              symbol: "storefront.fill", localIPA: nil,
-              webURL: "https://altstore.io")
-    ]
+    enum CodingKeys: String, CodingKey {
+        case name, htmlURL, owner, repo, isOfficial
+    }
+
+    init(name: String, owner: String, repo: String, htmlURL: String, isOfficial: Bool = false) {
+        self.name = name
+        self.owner = owner
+        self.repo = repo
+        self.htmlURL = htmlURL
+        self.isOfficial = isOfficial
+    }
 }
 
-struct ITRepo: Codable, Identifiable {
-    let id: UUID
-    let title: String
-    let slug: String
-    let is_public: Bool
-    let owner_id: UUID?
+struct GitHubApp: Codable, Identifiable {
+    var id: UUID = UUID()
+    var name: String
+    var details: String
+    var ipaPath: String
+    var iconPath: String?
+    var releaseURL: String?
+    var version: String?
 }
 
-struct ITRepoApp: Codable, Identifiable {
-    let id: UUID
-    let repo_id: UUID
+struct PublicSourceIndex: Codable { var sources: [SourceEntry] }
+
+struct SourceEntry: Codable, Identifiable {
+    var id: String { url }
     let name: String
-    let description: String
-    let ipa_url: String
-    let icon_url: String?
+    let url: String
 }
 
-struct ITAuthResult: Decodable {
-    let access_token: String?
-    let user: ITAuthUser?
-}
-struct ITAuthUser: Decodable {
-    let id: UUID
-}
-
-// MARK: - Supabase REST client
+// MARK: - GitHub and local account state
 
 @MainActor
-final class ITCloud: ObservableObject {
-    @Published var token: String?
-    @Published var accountEmail: String?
-    @Published var publicRepos: [ITRepo] = []
-    @Published var selectedRepoApps: [ITRepoApp] = []
+final class ITStore: ObservableObject {
+    @Published var repos: [GitHubRepo] = []
+    @Published var apps: [GitHubApp] = []
     @Published var message: String?
+    @Published var isBusy = false
+    @Published var signedInUsername: String?
+    @Published var isOfficialUnlocked = false
+    @Published var githubUsername = ""
+    @Published var githubToken = ""
+    @Published var deviceSummary = ""
 
-    private var base: String { ITConfig.supabaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+    private let defaults = UserDefaults.standard
+    private let repoKey = "itools.saved.github.sources"
+    private let tokenService = "com.itools.github.token"
+    private let accountService = "com.itools.local.accounts"
 
-    private var configured: Bool {
-        !ITConfig.supabaseURL.isEmpty &&
-        !ITConfig.supabaseAnonKey.isEmpty &&
-        !ITConfig.supabaseURL.contains("YOUR-PROJECT") &&
-        !ITConfig.supabaseAnonKey.contains("YOUR_")
-    }
-
-    private func makeRequest(path: String, method: String = "GET",
-                             body: Data? = nil, contentType: String = "application/json",
-                             extraHeaders: [String: String] = [:]) throws -> URLRequest {
-        guard configured, let url = URL(string: base + path) else {
-            throw NSError(domain: "iTools", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Add your Supabase URL and anon key in ITConfig first."])
+    init() {
+        loadLocalRepos()
+        signedInUsername = defaults.string(forKey: "itools.signed.in")
+        refreshDeviceSummary()
+        if !repos.contains(where: { $0.isOfficial }) {
+            repos.insert(officialRepo, at: 0)
+            saveLocalRepos()
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.httpBody = body
-        request.setValue(ITConfig.supabaseAnonKey, forHTTPHeaderField: "apikey")
-        let credential = token ?? ITConfig.supabaseAnonKey
-        request.setValue(
-            ["Bearer", credential].joined(separator: " "),
-            forHTTPHeaderField: "Authorization"
-        )
-        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        extraHeaders.forEach { request.setValue($1, forHTTPHeaderField: $0) }
-        return request
+        githubToken = readSecret(service: tokenService, account: "token") ?? ""
+        githubUsername = defaults.string(forKey: "itools.github.username") ?? ""
     }
 
-    private func send(_ request: URLRequest) async throws -> Data {
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else {
-            let detail = String(data: data, encoding: .utf8) ?? "Unknown server error"
-            throw NSError(domain: "iToolsCloud", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: detail])
+    private var officialRepo: GitHubRepo {
+        GitHubRepo(name: "iTools Official", owner: ITConfig.officialOwner,
+                   repo: ITConfig.officialRepository,
+                   htmlURL: "https://github.com/\(ITConfig.officialOwner)/\(ITConfig.officialRepository)",
+                   isOfficial: true)
+    }
+
+    func refreshDeviceSummary() {
+        let device = UIDevice.current
+        deviceSummary = "\(device.localizedModel) - \(device.systemName) \(device.systemVersion)"
+    }
+
+    private func readSecret(service: String, account: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func writeSecret(_ value: String, service: String, account: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(query as CFDictionary)
+        var item = query
+        item[kSecValueData as String] = Data(value.utf8)
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        SecItemAdd(item as CFDictionary, nil)
+    }
+
+    func signUp(username: String, password: String) {
+        let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard cleanUsername.count >= 3, password.count >= 8 else {
+            message = "Username must be at least 3 characters and password at least 8 characters."
+            return
         }
-        return data
+        guard readSecret(service: accountService, account: cleanUsername) == nil else {
+            message = "That username already exists on this device."
+            return
+        }
+        writeSecret(password, service: accountService, account: cleanUsername)
+        signIn(username: cleanUsername, password: password)
+        message = "Account created on this device."
     }
 
-    func signUp(email: String, password: String) async {
-        do {
-            let body = try JSONSerialization.data(withJSONObject: [
-                "email": email, "password": password
-            ])
-            let request = try makeRequest(path: "/auth/v1/signup", method: "POST", body: body)
-            let data = try await send(request)
-            let result = try JSONDecoder().decode(ITAuthResult.self, from: data)
-            token = result.access_token
-            accountEmail = email
-            message = token == nil
-                ? "Check your email to confirm your account, then sign in."
-                : "Account created."
-        } catch { message = error.localizedDescription }
+    func signIn(username: String, password: String) {
+        let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard readSecret(service: accountService, account: cleanUsername) == password else {
+            message = "Incorrect username or password. Local accounts do not sync between devices."
+            return
+        }
+        signedInUsername = cleanUsername
+        defaults.set(cleanUsername, forKey: "itools.signed.in")
+        message = "Signed in."
     }
 
-    func signIn(email: String, password: String) async {
-        do {
-            let body = try JSONSerialization.data(withJSONObject: [
-                "email": email, "password": password
-            ])
-            let request = try makeRequest(
-                path: "/auth/v1/token?grant_type=password",
-                method: "POST", body: body
-            )
-            let data = try await send(request)
-            let result = try JSONDecoder().decode(ITAuthResult.self, from: data)
-            guard let newToken = result.access_token else {
-                throw NSError(domain: "iTools", code: 3,
-                              userInfo: [NSLocalizedDescriptionKey: "Sign-in needs email confirmation or a valid account."])
-            }
-            token = newToken
-            accountEmail = email
-            message = "Signed in."
-        } catch { message = error.localizedDescription }
+    func signOut() {
+        signedInUsername = nil
+        defaults.removeObject(forKey: "itools.signed.in")
     }
 
-    func resetPassword(email: String) async {
+    func saveGitHubCredentials() async {
+        let cleanToken = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanToken.isEmpty else {
+            message = "Enter a GitHub Personal Access Token first."
+            return
+        }
+        writeSecret(cleanToken, service: tokenService, account: "token")
+        defaults.set(githubUsername, forKey: "itools.github.username")
         do {
-            let body = try JSONSerialization.data(withJSONObject: ["email": email])
-            let request = try makeRequest(
-                path: "/auth/v1/recover",
-                method: "POST",
-                body: body
-            )
-            _ = try await send(request)
-            message = "Password reset email sent. Open the link in your email to choose a new password."
+            let (data, _) = try await api("user")
+            let profile = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let authenticatedUsername = profile?["login"] as? String ?? ""
+            githubUsername = authenticatedUsername
+            defaults.set(authenticatedUsername, forKey: "itools.github.username")
+            isOfficialUnlocked = authenticatedUsername.caseInsensitiveCompare(ITConfig.officialOwner) == .orderedSame
+            message = isOfficialUnlocked
+                ? "GitHub connected as the official repository owner. Repository permissions are still enforced by GitHub."
+                : "GitHub connected. The token is stored securely in Keychain."
         } catch {
+            isOfficialUnlocked = false
             message = error.localizedDescription
         }
     }
 
-    func signOut() {
-        token = nil
-        accountEmail = nil
-        publicRepos = []
-        selectedRepoApps = []
+    private func api(_ path: String, method: String = "GET", body: [String: Any]? = nil) async throws -> (Data, HTTPURLResponse) {
+        let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            throw NSError(domain: "iToolsGitHub", code: 401,
+                          userInfo: [NSLocalizedDescriptionKey: "Add your GitHub Personal Access Token in Settings first."])
+        }
+        let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        guard let url = URL(string: "https://api.github.com/\(cleanPath)") else {
+            throw NSError(domain: "iToolsGitHub", code: 400,
+                          userInfo: [NSLocalizedDescriptionKey: "Invalid GitHub API URL."])
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw NSError(domain: "iToolsGitHub", code: 0,
+                          userInfo: [NSLocalizedDescriptionKey: "No GitHub response."])
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["message"] as? String
+            throw NSError(domain: "iToolsGitHub", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: detail ?? "GitHub API error \(http.statusCode). Check token permissions."])
+        }
+        return (data, http)
     }
 
-    func fetchPublicRepos() async {
-        if !configured {
-            publicRepos = [
-                ITRepo(
-                    id: UUID(uuidString: "11111111-1111-4111-8111-111111111111") ?? UUID(),
-                    title: "iTools Official",
-                    slug: ITConfig.officialRepoSlug,
-                    is_public: true,
-                    owner_id: nil
-                )
-            ]
+    func addSourceURL(_ text: String, displayName: String? = nil) {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              url.scheme == "https", url.host == "github.com" else {
+            message = "Paste a GitHub repository URL, such as https://github.com/owner/repository."
             return
         }
-        do {
-            let request = try makeRequest(
-                path: "/rest/v1/repos?select=id,title,slug,is_public,owner_id&is_public=eq.true&order=title.asc"
-            )
-            let data = try await send(request)
-            publicRepos = try JSONDecoder().decode([ITRepo].self, from: data)
-        } catch { message = error.localizedDescription }
+        let parts = url.pathComponents.dropFirst().prefix(2).map { $0.replacingOccurrences(of: ".git", with: "") }
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else {
+            message = "Paste a GitHub repository URL, such as https://github.com/owner/repository."
+            return
+        }
+        let owner = parts[0]
+        let repository = parts[1]
+        let item = GitHubRepo(name: displayName?.isEmpty == false ? displayName! : repository,
+                              owner: owner, repo: repository,
+                              htmlURL: "https://github.com/\(owner)/\(repository)")
+        guard !repos.contains(where: { $0.id == item.id }) else {
+            message = "This source is already in your list."
+            return
+        }
+        repos.append(item)
+        saveLocalRepos()
+        message = "Source added on this device. Submit it to the public iTools catalogue to share it with everyone."
     }
 
-    func createRepo(title: String, slug: String, isPublic: Bool) async {
+    func createGitHubRepository(from text: String, isPrivate: Bool) async {
+        guard let url = URL(string: text), url.host == "github.com" else {
+            message = "Enter a GitHub URL like https://github.com/yourname/new-ios-app."
+            return
+        }
+        let parts = url.pathComponents.dropFirst().prefix(2)
+        guard let name = parts.last, !name.isEmpty else {
+            message = "Enter a GitHub URL like https://github.com/yourname/new-ios-app."
+            return
+        }
+        isBusy = true
+        defer { isBusy = false }
         do {
-            let body = try JSONSerialization.data(withJSONObject: [
-                "title": title, "slug": slug, "is_public": isPublic
-            ])
-            let request = try makeRequest(
-                path: "/rest/v1/repos", method: "POST", body: body,
-                extraHeaders: ["Prefer": "return=representation"]
-            )
-            _ = try await send(request)
-            message = "Repository created."
-            await fetchPublicRepos()
-        } catch { message = error.localizedDescription }
-    }
-
-    func updateRepo(id: UUID, title: String, slug: String, isPublic: Bool) async {
-        do {
-            let body = try JSONSerialization.data(withJSONObject: [
-                "title": title, "slug": slug, "is_public": isPublic
-            ])
-            let request = try makeRequest(
-                path: "/rest/v1/repos?id=eq.\(id.uuidString)",
-                method: "PATCH", body: body,
-                extraHeaders: ["Prefer": "return=minimal"]
-            )
-            _ = try await send(request)
-            message = "Repository updated."
-            await fetchPublicRepos()
-        } catch { message = error.localizedDescription }
-    }
-
-    func fetchApps(repoID: UUID) async {
-        do {
-            let request = try makeRequest(
-                path: "/rest/v1/apps?select=id,repo_id,name,description,ipa_url,icon_url&repo_id=eq.\(repoID.uuidString)&order=name.asc"
-            )
-            let data = try await send(request)
-            selectedRepoApps = try JSONDecoder().decode([ITRepoApp].self, from: data)
-        } catch { message = error.localizedDescription }
-    }
-
-    func upload(data: Data, fileName: String, contentType: String) async throws -> String {
-        let safeName = fileName.replacingOccurrences(of: "/", with: "_")
-        let path = "\(UUID().uuidString)-\(safeName)"
-        let request = try makeRequest(
-            path: "/storage/v1/object/\(ITConfig.storageBucket)/\(path)",
-            method: "POST", body: data, contentType: contentType,
-            extraHeaders: ["x-upsert": "false"]
-        )
-        _ = try await send(request)
-        return "\(base)/storage/v1/object/public/\(ITConfig.storageBucket)/\(path)"
-    }
-
-    func publishApp(repoID: UUID, name: String, description: String,
-                    ipaData: Data, ipaName: String, iconData: Data?) async {
-        do {
-            let ipaURL = try await upload(
-                data: ipaData, fileName: ipaName,
-                contentType: "application/octet-stream"
-            )
-            var iconURL: String? = nil
-            if let iconData {
-                iconURL = try await upload(
-                    data: iconData, fileName: "\(UUID().uuidString).jpg",
-                    contentType: "image/jpeg"
-                )
+            let (data, _) = try await api("user/repos", method: "POST",
+                                          body: ["name": name, "private": isPrivate,
+                                                 "auto_init": true, "description": "iTools app repository"])
+            let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            let owner = (object["owner"] as? [String: Any])?["login"] as? String ?? githubUsername
+            let actualName = object["name"] as? String ?? name
+            let repository = GitHubRepo(name: actualName, owner: owner, repo: actualName,
+                                        htmlURL: "https://github.com/\(owner)/\(actualName)")
+            if !repos.contains(where: { $0.id == repository.id }) {
+                repos.append(repository)
+                saveLocalRepos()
             }
-            var object: [String: Any] = [
-                "repo_id": repoID.uuidString,
-                "name": name,
-                "description": description,
-                "ipa_url": ipaURL
-            ]
-            if let iconURL { object["icon_url"] = iconURL }
-            let body = try JSONSerialization.data(withJSONObject: object)
-            let request = try makeRequest(
-                path: "/rest/v1/apps", method: "POST", body: body
-            )
-            _ = try await send(request)
-            message = "App published to the repository."
-            await fetchApps(repoID: repoID)
+            message = "GitHub repository created and added to iTools."
         } catch { message = error.localizedDescription }
+    }
+
+    private func existingSHA(owner: String, repo: String, path: String) async -> String? {
+        guard let (data, _) = try? await api("repos/\(owner)/\(repo)/contents/\(path)") else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["sha"] as? String
+    }
+
+    func uploadFile(data: Data, filename: String, to repo: GitHubRepo, message commitMessage: String) async throws {
+        let path = "iTools/\(filename)"
+        var body: [String: Any] = ["message": commitMessage, "content": data.base64EncodedString()]
+        if let sha = await existingSHA(owner: repo.owner, repo: repo.repo, path: path) { body["sha"] = sha }
+        _ = try await api("repos/\(repo.owner)/\(repo.repo)/contents/\(path)", method: "PUT", body: body)
+    }
+
+    func loadApps(for repo: GitHubRepo) async {
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let address = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.repo)/HEAD/iTools/\(ITConfig.appsPath)"
+            guard let url = URL(string: address) else { throw URLError(.badURL) }
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                apps = []
+                message = "No \(ITConfig.appsPath) catalogue found yet. Upload an app to create it."
+                return
+            }
+            apps = try JSONDecoder().decode([GitHubApp].self, from: data)
+            message = nil
+        } catch {
+            apps = []
+            message = error.localizedDescription
+        }
+    }
+
+    func publishApp(_ app: GitHubApp, ipa: Data, icon: Data?, to repo: GitHubRepo,
+                    makeRelease: Bool, version: String) async {
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let safeName = app.name.replacingOccurrences(of: " ", with: "-")
+                .replacingOccurrences(of: "/", with: "-")
+            let ipaName = "\(safeName).ipa"
+            try await uploadFile(data: ipa, filename: ipaName, to: repo, message: "Add \(app.name) IPA")
+            var iconURL: String?
+            if let icon {
+                let iconName = "\(safeName)-icon.png"
+                try await uploadFile(data: icon, filename: iconName, to: repo, message: "Add \(app.name) icon")
+                iconURL = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.repo)/HEAD/iTools/\(iconName)"
+            }
+            var releaseURL: String?
+            if makeRelease && !version.isEmpty {
+                let releaseBody: [String: Any] = [
+                    "tag_name": version,
+                    "name": "\(app.name) \(version)",
+                    "body": "Release published from iTools.",
+                    "draft": false,
+                    "prerelease": false
+                ]
+                let (data, _) = try await api("repos/\(repo.owner)/\(repo.repo)/releases", method: "POST", body: releaseBody)
+                releaseURL = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["html_url"] as? String
+            }
+            let ipaURL = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.repo)/HEAD/iTools/\(ipaName)"
+            let entry = GitHubApp(name: app.name, details: app.details, ipaPath: ipaURL,
+                                  iconPath: iconURL, releaseURL: releaseURL,
+                                  version: version.isEmpty ? nil : version)
+            var updatedApps = apps
+            updatedApps.append(entry)
+            let encoded = try JSONEncoder.pretty.encode(updatedApps)
+            try await uploadFile(data: encoded, filename: ITConfig.appsPath, to: repo,
+                                 message: "Update iTools app catalogue")
+            apps = updatedApps
+            message = "App uploaded to GitHub and added to the repository catalogue."
+        } catch { message = error.localizedDescription }
+    }
+
+    func submitSourceToOfficialCatalogue(_ repo: GitHubRepo) async {
+        let body = "Please review and add this iTools source to sources.json:\n\nName: \(repo.name)\nURL: \(repo.htmlURL)\n"
+        var components = URLComponents(string: "https://github.com/\(ITConfig.officialOwner)/\(ITConfig.officialRepository)/issues/new")
+        components?.queryItems = [
+            URLQueryItem(name: "title", value: "Add source: \(repo.fullName)"),
+            URLQueryItem(name: "body", value: body)
+        ]
+        guard let url = components?.url else {
+            message = "Could not create the GitHub submission link."
+            return
+        }
+        await UIApplication.shared.open(url)
+        message = "Opened a GitHub source submission. A maintainer must approve it before it syncs to everyone."
+    }
+
+    func refreshOfficialCatalogue() async {
+        let address = "https://raw.githubusercontent.com/\(ITConfig.officialOwner)/\(ITConfig.officialRepository)/main/\(ITConfig.catalogPath)"
+        do {
+            guard let url = URL(string: address) else { return }
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            let index = try JSONDecoder().decode(PublicSourceIndex.self, from: data)
+            for source in index.sources {
+                guard let url = URL(string: source.url) else { continue }
+                let parts = url.pathComponents.dropFirst().prefix(2)
+                guard parts.count == 2 else { continue }
+                let item = GitHubRepo(name: source.name, owner: parts[0], repo: parts[1],
+                                      htmlURL: "https://github.com/\(parts[0])/\(parts[1])")
+                if !repos.contains(where: { $0.id == item.id }) { repos.append(item) }
+            }
+            saveLocalRepos()
+        } catch {
+            // Keep locally saved sources available when the catalogue cannot be reached.
+        }
+    }
+
+    private func loadLocalRepos() {
+        guard let data = defaults.data(forKey: repoKey),
+              let decoded = try? JSONDecoder().decode([GitHubRepo].self, from: data) else { return }
+        repos = decoded
+    }
+
+    private func saveLocalRepos() {
+        if let data = try? JSONEncoder().encode(repos) { defaults.set(data, forKey: repoKey) }
+    }
+
+    func removeRepos(at offsets: IndexSet) {
+        for index in offsets.sorted(by: >) where repos.indices.contains(index) && !repos[index].isOfficial {
+            repos.remove(at: index)
+        }
+        saveLocalRepos()
     }
 }
 
-// MARK: - Main App
+extension JSONEncoder {
+    static var pretty: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return encoder
+    }
+}
+
+// MARK: - App
 
 @main
 struct iToolsApp: App {
-    @StateObject private var cloud = ITCloud()
+    @StateObject private var store = ITStore()
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .environmentObject(cloud)
+            ITMainView()
+                .environmentObject(store)
                 .preferredColorScheme(.dark)
                 .tint(.cyan)
         }
@@ -322,159 +425,170 @@ struct iToolsApp: App {
 }
 
 struct ITMainView: View {
-    @EnvironmentObject var cloud: ITCloud
+    @EnvironmentObject var store: ITStore
     var body: some View {
         TabView {
             ITHomeView().tabItem { Label("Home", systemImage: "house.fill") }
-            ITToolsView().tabItem { Label("Apps", systemImage: "square.grid.2x2.fill") }
+            ITAppsView().tabItem { Label("Apps", systemImage: "square.grid.2x2.fill") }
             ITSourcesView().tabItem { Label("Sources", systemImage: "shippingbox.fill") }
-            ITAccountView().tabItem { Label("Account", systemImage: "person.crop.circle") }
+            ITSettingsView().tabItem { Label("Settings", systemImage: "gearshape.fill") }
         }
         .alert("iTools", isPresented: Binding(
-            get: { cloud.message != nil },
-            set: { if !$0 { cloud.message = nil } }
+            get: { store.message != nil },
+            set: { if !$0 { store.message = nil } }
         )) {
-            Button("OK") { cloud.message = nil }
-        } message: { Text(cloud.message ?? "") }
+            Button("OK") { store.message = nil }
+        } message: { Text(store.message ?? "") }
+        .task { await store.refreshOfficialCatalogue() }
     }
 }
 
 struct ITHomeView: View {
-    @EnvironmentObject var cloud: ITCloud
+    @EnvironmentObject var store: ITStore
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("iTools").font(.system(size: 38, weight: .bold))
-                    Text("Apps, sources and community repositories.")
+            List {
+                Section {
+                    Text("iTools").font(.largeTitle.bold())
+                    Text("Apps, GitHub repositories and community sources.")
                         .foregroundStyle(.secondary)
-                    HStack {
-                        stat("Apps", "\(ITTool.all.count)", "square.grid.2x2")
-                        stat("Public sources", "\(cloud.publicRepos.count)", "globe")
+                }
+                Section("Featured apps") {
+                    ForEach(ITBuiltinApp.all) { app in
+                        NavigationLink { ITBuiltinDetail(app: app) } label: { ITBuiltinRow(app: app) }
                     }
-                    Text("Featured apps").font(.title2.bold())
-                    ForEach(ITTool.all) { tool in
-                        NavigationLink { ITToolDetailView(tool: tool) } label: {
-                            ITToolRow(tool: tool)
-                        }.buttonStyle(.plain)
+                }
+                Section("Build") {
+                    if let buildsURL = URL(string: ITConfig.buildsURL) {
+                        Link(destination: buildsURL) {
+                            Label("View and download latest build", systemImage: "arrow.down.to.line")
+                        }
                     }
-                    NavigationLink("Scan an IPA") { ITScannerView() }
-                        .buttonStyle(.borderedProminent)
-                    Text("Only install files you trust. A basic scan cannot prove an IPA is safe.")
+                    Text("Open the latest successful run and download the iTools-unsigned-ipa artifact.")
                         .font(.caption).foregroundStyle(.secondary)
-                }.padding()
+                }
+                Section("Device") {
+                    Label(store.deviceSummary, systemImage: "iphone")
+                }
             }.navigationTitle("Home")
         }
-        .task { await cloud.fetchPublicRepos() }
-    }
-
-    private func stat(_ title: String, _ value: String, _ icon: String) -> some View {
-        VStack(alignment: .leading) {
-            Image(systemName: icon).foregroundStyle(.cyan)
-            Text(value).font(.largeTitle.bold())
-            Text(title).foregroundStyle(.secondary)
-        }.frame(maxWidth: .infinity, alignment: .leading)
-            .padding().background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 15))
     }
 }
 
-struct ITToolsView: View {
-    @State private var search = ""
-    private var filtered: [ITTool] {
-        search.isEmpty ? ITTool.all : ITTool.all.filter {
-            $0.name.localizedCaseInsensitiveContains(search) ||
-            $0.subtitle.localizedCaseInsensitiveContains(search)
-        }
-    }
-    var body: some View {
-        NavigationStack {
-            List(filtered) { tool in
-                NavigationLink { ITToolDetailView(tool: tool) } label: {
-                    ITToolRow(tool: tool)
-                }
-            }
-            .navigationTitle("Apps")
-            .searchable(text: $search)
-        }
-    }
+struct ITBuiltinApp: Identifiable {
+    let id: String
+    let name: String
+    let subtitle: String
+    let detail: String
+    let icon: String
+    let ipaResource: String?
+    let web: String?
+    let tutorial: String?
+
+    static let all: [ITBuiltinApp] = [
+        .init(id: "sidestore", name: "SideStore", subtitle: "Sideloading and app refresh",
+              detail: "SideStore lets you sideload compatible apps. Follow its official setup instructions for your device and iOS version.",
+              icon: "SideStore", ipaResource: nil,
+              web: "https://github.com/SideStore/SideStore/releases", tutorial: "https://sidestore.io/"),
+        .init(id: "altstore", name: "AltStore", subtitle: "Alternative app sideloading",
+              detail: "AltStore is an alternative app sideloading tool. Check the official site for supported devices and setup.",
+              icon: "AltStore", ipaResource: nil, web: "https://altstore.io", tutorial: "https://faq.altstore.io/"),
+        .init(id: "livecontainer", name: "LiveContainer", subtitle: "Run apps in a container",
+              detail: "LiveContainer provides a container environment for running compatible iOS apps. Check its documentation for compatibility.",
+              icon: "LiveContainer", ipaResource: nil,
+              web: "https://github.com/LiveContainer/LiveContainer/releases", tutorial: "https://github.com/LiveContainer/LiveContainer"),
+        .init(id: "combined", name: "LiveContainer + SideStore", subtitle: "Combined app entry",
+              detail: "A combined listing for LiveContainer and SideStore. Both apps remain separate and need their own setup.",
+              icon: "combined", ipaResource: "LiveContainer+SideStore", web: nil,
+              tutorial: "https://github.com/SideStore/SideStore/wiki"),
+        .init(id: "nyxian", name: "Nyxian", subtitle: "Included Nyxian IPA",
+              detail: "Nyxian compatibility depends on the exact IPA and iOS release. Check the included IPA's minimum iOS requirement before using it.",
+              icon: "Nyxian", ipaResource: "Nyxian", web: nil, tutorial: ITConfig.nyxianTutorial)
+    ]
 }
 
-struct ITToolRow: View {
-    let tool: ITTool
+struct ITBuiltinRow: View {
+    let app: ITBuiltinApp
     var body: some View {
-        HStack(spacing: 13) {
-            Image(systemName: tool.symbol)
-                .font(.system(size: 23, weight: .semibold))
-                .foregroundStyle(.cyan)
-                .frame(width: 54, height: 54)
-                .background(.cyan.opacity(0.13), in: RoundedRectangle(cornerRadius: 14))
+        HStack(spacing: 12) {
+            ITAppIcon(name: app.icon, size: 52)
             VStack(alignment: .leading, spacing: 4) {
-                Text(tool.name).font(.headline).foregroundStyle(.primary)
-                Text(tool.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(app.name).font(.headline)
+                Text(app.subtitle).font(.caption).foregroundStyle(.secondary)
             }
-            Spacer()
-            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
-        }.padding(.vertical, 5)
+        }.padding(.vertical, 4)
     }
 }
 
-struct ITToolDetailView: View {
-    @EnvironmentObject var cloud: ITCloud
-    let tool: ITTool
-    @State private var shareURL: URL?
-    @State private var showShare = false
-    @State private var downloading = false
+struct ITAppIcon: View {
+    let name: String
+    var size: CGFloat = 56
+    var body: some View {
+        Group {
+            if name == "combined" {
+                HStack(spacing: 0) {
+                    Image("LiveContainer").resizable().scaledToFill().frame(width: size / 2, height: size)
+                    Image("SideStore").resizable().scaledToFill().frame(width: size / 2, height: size)
+                }.clipped()
+            } else {
+                Image(name).resizable().scaledToFill()
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.23))
+    }
+}
 
+struct ITBuiltinDetail: View {
+    let app: ITBuiltinApp
+    @State private var shareItems: [Any] = []
+    @State private var showShare = false
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 17) {
-                Image(systemName: tool.symbol)
-                    .font(.system(size: 58)).foregroundStyle(.cyan)
-                    .frame(maxWidth: .infinity).padding(.vertical, 24)
-                Text(tool.name).font(.largeTitle.bold())
-                Text(tool.description).foregroundStyle(.secondary)
-                Button {
-                    getApp()
-                } label: {
-                    HStack {
-                        if downloading { ProgressView().tint(.white) }
-                        Text("Get")
-                    }.frame(maxWidth: .infinity)
+            VStack(alignment: .leading, spacing: 16) {
+                ITAppIcon(name: app.icon, size: 112).frame(maxWidth: .infinity)
+                Text(app.name).font(.largeTitle.bold())
+                Text(app.detail).foregroundStyle(.secondary)
+                Button("Get") { get() }
+                    .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
+                if let web = app.web, let url = URL(string: web) {
+                    Link("Official releases / website", destination: url)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(downloading)
-
-                if let urlString = tool.webURL, let url = URL(string: urlString) {
-                    Link("Open official project page", destination: url)
-                        .buttonStyle(.bordered)
+                if let tutorial = app.tutorial, let url = URL(string: tutorial) {
+                    Link("Open tutorial / setup guide", destination: url)
                 }
-                if tool.id == "nyxian" {
-                    Text("Included Nyxian IPA: version 0.11.6.1. Its embedded Info.plist declares minimum iOS 18.0.")
+                if app.id == "nyxian" {
+                    Text("If Get reports that Nyxian.ipa is missing, add Nyxian.ipa to the Xcode target's Copy Bundle Resources.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text("iOS does not let a normal app install an IPA directly. Get shares the IPA so you can open it with a compatible sideloading tool.")
+                Text("iOS does not allow ordinary apps to silently install IPA files. Get opens the share sheet so you can save or open the IPA in a compatible sideloading tool.")
                     .font(.caption).foregroundStyle(.secondary)
-                    .padding().background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
             }.padding()
         }
-        .navigationTitle(tool.name)
+        .navigationTitle(app.name)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showShare) {
-            if let shareURL { ITShareSheet(items: [shareURL]) }
-        }
+        .sheet(isPresented: $showShare) { ITShareSheet(items: shareItems) }
     }
 
-    private func getApp() {
-        if let resource = tool.localIPA,
-           let file = Bundle.main.url(forResource: resource, withExtension: "ipa") {
-            shareURL = file
+    private func get() {
+        if let resource = app.ipaResource,
+           let url = Bundle.main.url(forResource: resource, withExtension: "ipa") {
+            shareItems = [url]
             showShare = true
-            return
-        }
-        if let string = tool.webURL, let url = URL(string: string) {
+        } else if app.id == "combined" {
+            let urls = ["LiveContainer", "SideStore"].compactMap {
+                Bundle.main.url(forResource: $0, withExtension: "ipa")
+            }
+            if !urls.isEmpty {
+                shareItems = urls
+                showShare = true
+            } else if let url = URL(string: app.tutorial ?? "https://github.com") {
+                UIApplication.shared.open(url)
+            }
+        } else if let web = app.web, let url = URL(string: web) {
             UIApplication.shared.open(url)
-        } else {
-            cloud.message = "The IPA resource is missing. Add the IPA to Copy Bundle Resources in Xcode."
+        } else if let url = URL(string: app.tutorial ?? ITConfig.nyxianTutorial) {
+            UIApplication.shared.open(url)
         }
     }
 }
@@ -487,490 +601,300 @@ struct ITShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
-// MARK: - Sources and repositories
+struct ITAppsView: View {
+    @State private var query = ""
+    private var filtered: [ITBuiltinApp] {
+        query.isEmpty ? ITBuiltinApp.all : ITBuiltinApp.all.filter {
+            $0.name.localizedCaseInsensitiveContains(query)
+        }
+    }
+    var body: some View {
+        NavigationStack {
+            List(filtered) { app in
+                NavigationLink { ITBuiltinDetail(app: app) } label: { ITBuiltinRow(app: app) }
+            }
+            .navigationTitle("Apps")
+            .searchable(text: $query)
+        }
+    }
+}
 
 struct ITSourcesView: View {
-    @EnvironmentObject var cloud: ITCloud
+    @EnvironmentObject var store: ITStore
+    @State private var showAdd = false
     @State private var showCreate = false
-
     var body: some View {
         NavigationStack {
             List {
-                Section("Official source") {
-                    NavigationLink {
-                        ITOfficialRepoView()
-                    } label: {
-                        HStack {
-                            Image(systemName: "checkmark.seal.fill").foregroundStyle(.cyan)
-                            VStack(alignment: .leading) {
-                                Text("iTools Official").font(.headline)
-                                Text(ITConfig.officialRepoSlug).font(.caption).foregroundStyle(.secondary)
+                Section("Repositories") {
+                    ForEach(store.repos) { repo in
+                        NavigationLink { ITRepositoryView(repo: repo) } label: {
+                            HStack {
+                                Image(systemName: repo.isOfficial ? "checkmark.seal.fill" : "shippingbox.fill")
+                                    .foregroundStyle(repo.isOfficial ? .cyan : .secondary)
+                                VStack(alignment: .leading) {
+                                    Text(repo.name).font(.headline)
+                                    Text(repo.fullName).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if repo.isOfficial {
+                                    Text("OFFICIAL").font(.caption2).foregroundStyle(.cyan)
+                                }
                             }
                         }
+                    }
+                    .onDelete { store.removeRepos(at: $0) }
+                }
+                Section {
+                    Button { showAdd = true } label: { Label("Add GitHub source URL", systemImage: "plus") }
+                    Button { showCreate = true } label: { Label("Create GitHub repository", systemImage: "plus.app") }
+                    Button { Task { await store.refreshOfficialCatalogue() } } label: {
+                        Label("Refresh shared sources", systemImage: "arrow.clockwise")
                     }
                 }
-                Section("Public community repositories") {
-                    if cloud.publicRepos.isEmpty {
-                        Text("No public community repositories loaded.").foregroundStyle(.secondary)
-                    }
-                    ForEach(cloud.publicRepos) { repo in
-                        NavigationLink {
-                            ITRepoDetailView(repo: repo)
-                        } label: {
-                            VStack(alignment: .leading) {
-                                Text(repo.title).font(.headline)
-                                Text(repo.slug).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                Section {
+                    Text("Sources you add are saved on this device. Submit a source for review to make it visible to every iTools user.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Sources")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showCreate = true } label: {
-                        Image(systemName: "plus.circle.fill")
-                    }
-                }
-            }
-            .refreshable { await cloud.fetchPublicRepos() }
-            .sheet(isPresented: $showCreate) { ITCreateRepoView() }
+            .sheet(isPresented: $showAdd) { ITAddSourceSheet() }
+            .sheet(isPresented: $showCreate) { ITCreateGitHubRepoSheet() }
         }
     }
 }
 
-struct ITOfficialRepoView: View {
-    @EnvironmentObject var cloud: ITCloud
-    @State private var repo: ITRepo?
-    @State private var apps: [ITRepoApp] = []
-    var body: some View {
-        List {
-            Section {
-                Text("iTools Official")
-                    .font(.title2.bold())
-                Text("Official public repository: \(ITConfig.officialRepoSlug)")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Apps") {
-                if apps.isEmpty { Text("The official repository has not been connected yet.") }
-                ForEach(apps) { app in
-                    ITPublishedAppRow(app: app)
-                }
-            }
-        }
-        .navigationTitle("iTools Official")
-        .task {
-            await cloud.fetchPublicRepos()
-            repo = cloud.publicRepos.first { $0.slug == ITConfig.officialRepoSlug }
-            if let repo { await cloud.fetchApps(repoID: repo.id); apps = cloud.selectedRepoApps }
-        }
-    }
-}
-
-struct ITCreateRepoView: View {
-    @EnvironmentObject var cloud: ITCloud
+struct ITAddSourceSheet: View {
+    @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) var dismiss
-    @State private var title = ""
-    @State private var slug = ""
-    @State private var isPublic = true
-
+    @State private var url = ""
     var body: some View {
         NavigationStack {
             Form {
-                Section("Repository details") {
-                    TextField("Repository name", text: $title)
-                    TextField("Unique link / slug", text: $slug)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Toggle("Make repository public", isOn: $isPublic)
+                Section("GitHub repository URL") {
+                    TextField("https://github.com/owner/repository", text: $url)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
                 }
-                Section {
-                    Text("Public repositories can be discovered by other iTools users. Only upload apps and artwork you have permission to distribute.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Button("Create repository") {
-                    Task {
-                        await cloud.createRepo(title: title, slug: slug, isPublic: isPublic)
-                        dismiss()
-                    }
-                }
-                .disabled(title.isEmpty || slug.isEmpty || cloud.token == nil)
+                Button("Add source") { store.addSourceURL(url); dismiss() }
+                    .disabled(url.isEmpty)
             }
-            .navigationTitle("New repository")
+            .navigationTitle("Add source")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
         }
     }
 }
 
-struct ITRepoDetailView: View {
-    @EnvironmentObject var cloud: ITCloud
+struct ITCreateGitHubRepoSheet: View {
+    @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) var dismiss
-    let repo: ITRepo
-    @State private var apps: [ITRepoApp] = []
-    @State private var showUpload = false
-    @State private var showEdit = false
+    @State private var url = ""
+    @State private var isPrivate = false
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Repository URL") {
+                    TextField("https://github.com/yourname/new-ios-app", text: $url)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Toggle("Private repository", isOn: $isPrivate)
+                }
+                Text("GitHub creates repositories under the account connected to the token. The URL's owner is a label; it cannot create a repository inside someone else's account.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Create on GitHub") {
+                    Task { await store.createGitHubRepository(from: url, isPrivate: isPrivate); dismiss() }
+                }
+                .disabled(url.isEmpty || store.githubToken.isEmpty)
+            }
+            .navigationTitle("New GitHub repository")
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+        }
+    }
+}
 
+struct ITRepositoryView: View {
+    @EnvironmentObject var store: ITStore
+    let repo: GitHubRepo
+    @State private var showUpload = false
     var body: some View {
         List {
             Section {
-                Text(repo.title).font(.title2.bold())
-                Text(repo.slug).font(.caption).foregroundStyle(.secondary)
-                Label(repo.is_public ? "Public repository" : "Private repository",
-                      systemImage: repo.is_public ? "globe" : "lock")
+                Text(repo.name).font(.title2.bold())
+                Text(repo.fullName).font(.caption).foregroundStyle(.secondary)
+                if let url = URL(string: repo.htmlURL) { Link("Open GitHub repository", destination: url) }
             }
             Section("Apps") {
-                if apps.isEmpty { Text("No apps published yet.") }
-                ForEach(apps) { ITPublishedAppRow(app: $0) }
-            }
-            if cloud.token != nil {
-                Section {
-                    Button { showUpload = true } label: {
-                        Label("Upload app / IPA", systemImage: "plus.app.fill")
+                if store.apps.isEmpty {
+                    Text("No iTools apps catalogue found. Upload an app to start this repository.")
+                }
+                ForEach(store.apps) { app in
+                    HStack {
+                        AsyncImage(url: app.iconPath.flatMap(URL.init(string:))) { image in
+                            image.resizable().scaledToFill()
+                        } placeholder: {
+                            Image(systemName: "app.fill").foregroundStyle(.cyan)
+                        }
+                        .frame(width: 48, height: 48).clipShape(RoundedRectangle(cornerRadius: 10))
+                        VStack(alignment: .leading) {
+                            Text(app.name).font(.headline)
+                            Text(app.details).font(.caption).foregroundStyle(.secondary)
+                            if let version = app.version { Text("Version \(version)").font(.caption2) }
+                            if let url = URL(string: app.ipaPath) { Link("Get", destination: url) }
+                            if let release = app.releaseURL, let url = URL(string: release) {
+                                Link("GitHub Releases", destination: url)
+                            }
+                        }
                     }
-                    Button { showEdit = true } label: {
-                        Label("Edit repository", systemImage: "pencil")
+                }
+            }
+            Section {
+                Button { showUpload = true } label: {
+                    Label("Upload app to this repository", systemImage: "square.and.arrow.up")
+                }
+                .disabled(store.githubToken.isEmpty)
+                if repo.isOfficial && !store.isOfficialUnlocked {
+                    Text("Connect a GitHub account with write access to this repository in Settings.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !repo.isOfficial {
+                    Button("Submit this source to the shared catalogue") {
+                        Task { await store.submitSourceToOfficialCatalogue(repo) }
                     }
                 }
             }
         }
         .navigationTitle("Repository")
-        .task { await cloud.fetchApps(repoID: repo.id); apps = cloud.selectedRepoApps }
-        .sheet(isPresented: $showUpload) { ITUploadAppView(repo: repo) }
-        .sheet(isPresented: $showEdit) { ITEditRepoView(repo: repo) }
+        .task { await store.loadApps(for: repo) }
+        .refreshable { await store.loadApps(for: repo) }
+        .sheet(isPresented: $showUpload) { ITUploadAppSheet(repo: repo) }
     }
 }
 
-struct ITPublishedAppRow: View {
-    let app: ITRepoApp
-    var body: some View {
-        HStack(spacing: 12) {
-            AsyncImage(url: URL(string: app.icon_url ?? "")) { image in
-                image.resizable().scaledToFill()
-            } placeholder: {
-                Image(systemName: "app.fill").foregroundStyle(.cyan)
-            }
-            .frame(width: 48, height: 48).clipShape(RoundedRectangle(cornerRadius: 10))
-            VStack(alignment: .leading) {
-                Text(app.name).font(.headline)
-                Text(app.description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                if let url = URL(string: app.ipa_url) { Link("Get", destination: url) }
-            }
-        }
-    }
-}
-
-struct ITEditRepoView: View {
-    @EnvironmentObject var cloud: ITCloud
+struct ITUploadAppSheet: View {
+    @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) var dismiss
-    let repo: ITRepo
-    @State private var title = ""
-    @State private var slug = ""
-    @State private var isPublic = true
-
+    let repo: GitHubRepo
+    @State private var name = ""
+    @State private var details = ""
+    @State private var version = ""
+    @State private var ipaData: Data?
+    @State private var iconData: Data?
+    @State private var ipaName = "Choose IPA file"
+    @State private var makeRelease = false
+    @State private var showIPA = false
+    @State private var showIcon = false
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Repository name", text: $title)
-                TextField("Repository link / slug", text: $slug)
-                    .textInputAutocapitalization(.never)
-                Toggle("Public", isOn: $isPublic)
-                Button("Save changes") {
+                Section("App details") {
+                    TextField("App name", text: $name)
+                    TextField("Description", text: $details, axis: .vertical)
+                    TextField("Version (optional)", text: $version)
+                }
+                Section("Files") {
+                    Button { showIPA = true } label: { Label(ipaName, systemImage: "doc.zipper") }
+                    Button { showIcon = true } label: {
+                        Label(iconData == nil ? "Add app logo (optional)" : "Logo selected", systemImage: "photo")
+                    }
+                }
+                Section("GitHub Releases") {
+                    Toggle("Create a GitHub release (optional)", isOn: $makeRelease)
+                    Text("The IPA is uploaded to the repository and added to itools-apps.json. The optional release creates a tagged release entry.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Upload app") {
+                    guard let ipaData else { return }
+                    let app = GitHubApp(name: name, details: details, ipaPath: "", iconPath: nil,
+                                        releaseURL: nil, version: version.isEmpty ? nil : version)
                     Task {
-                        await cloud.updateRepo(id: repo.id, title: title, slug: slug, isPublic: isPublic)
+                        await store.publishApp(app, ipa: ipaData, icon: iconData, to: repo,
+                                               makeRelease: makeRelease, version: version)
                         dismiss()
                     }
                 }
-            }
-            .navigationTitle("Edit repository")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
-            .onAppear {
-                title = repo.title
-                slug = repo.slug
-                isPublic = repo.is_public
-            }
-        }
-    }
-}
-
-struct ITUploadAppView: View {
-    @EnvironmentObject var cloud: ITCloud
-    @Environment(\.dismiss) var dismiss
-    let repo: ITRepo
-    @State private var name = ""
-    @State private var description = ""
-    @State private var ipaData: Data?
-    @State private var ipaName = ""
-    @State private var iconData: Data?
-    @State private var showingIPA = false
-    @State private var showingIcon = false
-    @State private var busy = false
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                appInformationSection
-                fileSelectionSection
-                publishButton
+                .disabled(name.isEmpty || ipaData == nil || store.githubToken.isEmpty ||
+                          (repo.isOfficial && !store.isOfficialUnlocked))
             }
             .navigationTitle("Upload app")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
-            .fileImporter(isPresented: $showingIPA,
-                          allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data],
-                          onCompletion: importIPA)
-            .fileImporter(isPresented: $showingIcon,
-                          allowedContentTypes: [.image],
-                          onCompletion: importIcon)
-        }
-    }
-
-    private var appInformationSection: some View {
-        Section("App information") {
-            TextField("App name", text: $name)
-            TextField("Description", text: $description, axis: .vertical)
-        }
-    }
-
-    private var fileSelectionSection: some View {
-        Section("Files") {
-            Button { showingIPA = true } label: {
-                Label(ipaName.isEmpty ? "Choose IPA file" : ipaName,
-                      systemImage: "doc.zipper")
+            .fileImporter(isPresented: $showIPA,
+                          allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data]) { result in
+                do {
+                    let url = try result.get()
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    ipaData = try Data(contentsOf: url)
+                    ipaName = url.lastPathComponent
+                } catch { store.message = error.localizedDescription }
             }
-            Button { showingIcon = true } label: {
-                Label(iconData == nil ? "Choose app icon image" : "Icon selected",
-                      systemImage: "photo")
+            .fileImporter(isPresented: $showIcon, allowedContentTypes: [.image]) { result in
+                do {
+                    let url = try result.get()
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    iconData = try Data(contentsOf: url)
+                } catch { store.message = error.localizedDescription }
             }
-        }
-    }
-
-    private var publishButton: some View {
-        Button(action: publishApp) {
-            HStack {
-                if busy { ProgressView() }
-                Text("Publish app")
-            }
-        }
-        .disabled(name.isEmpty || ipaData == nil || cloud.token == nil || busy)
-    }
-
-    private func publishApp() {
-        guard let ipaData else { return }
-        busy = true
-        Task {
-            await cloud.publishApp(
-                repoID: repo.id,
-                name: name,
-                description: description,
-                ipaData: ipaData,
-                ipaName: ipaName,
-                iconData: iconData
-            )
-            busy = false
-            dismiss()
-        }
-    }
-
-    private func importIPA(_ result: Result<URL, Error>) {
-        do {
-            let url = try result.get()
-            let access = url.startAccessingSecurityScopedResource()
-            defer {
-                if access {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-            ipaData = try Data(contentsOf: url)
-            ipaName = url.lastPathComponent
-        } catch {
-            cloud.message = error.localizedDescription
-        }
-    }
-
-    private func importIcon(_ result: Result<URL, Error>) {
-        do {
-            let url = try result.get()
-            let access = url.startAccessingSecurityScopedResource()
-            defer {
-                if access {
-                    url.stopAccessingSecurityScopedResource()
-                }
-            }
-            guard let image = UIImage(data: try Data(contentsOf: url)),
-                  let jpeg = image.jpegData(compressionQuality: 0.85) else {
-                throw NSError(
-                    domain: "iTools",
-                    code: 4,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "The selected icon image could not be read."
-                    ]
-                )
-            }
-            iconData = jpeg
-        } catch {
-            cloud.message = error.localizedDescription
         }
     }
 }
 
-// MARK: - Account
-
-struct ITAccountView: View {
-    @EnvironmentObject var cloud: ITCloud
-    @State private var email = ""
+struct ITSettingsView: View {
+    @EnvironmentObject var store: ITStore
+    @State private var username = ""
     @State private var password = ""
     @State private var createAccount = false
-
     var body: some View {
         NavigationStack {
             Form {
-                if cloud.token == nil {
-                    Section(createAccount ? "Create account" : "Sign in") {
-                        TextField("Email address", text: $email)
-                            .textInputAutocapitalization(.never)
-                            .keyboardType(.emailAddress)
-                            .autocorrectionDisabled()
+                Section("iTools account") {
+                    if let current = store.signedInUsername {
+                        Label("Signed in as \(current)", systemImage: "person.crop.circle.fill")
+                        Button("Sign out", role: .destructive) { store.signOut() }
+                    } else {
+                        Picker("Account action", selection: $createAccount) {
+                            Text("Sign in").tag(false)
+                            Text("Create account").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        TextField("Username", text: $username)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecureField("Password", text: $password)
                         Button(createAccount ? "Create account" : "Sign in") {
-                            Task {
-                                if createAccount {
-                                    await cloud.signUp(email: email, password: password)
-                                } else {
-                                    await cloud.signIn(email: email, password: password)
-                                }
-                                password = ""
-                            }
+                            if createAccount { store.signUp(username: username, password: password) }
+                            else { store.signIn(username: username, password: password) }
+                            password = ""
                         }
-                        .disabled(email.isEmpty || password.count < 6)
-                        if !createAccount {
-                            Button("Forgot password?") {
-                                Task {
-                                    await cloud.resetPassword(
-                                        email: email.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    )
-                                }
-                            }
-                            .disabled(!email.contains("@"))
-                        }
-                        Button(createAccount ? "I already have an account" : "Create a new account") {
-                            createAccount.toggle()
-                        }
-                        if let message = cloud.message {
-                            Text(message)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        .disabled(username.count < 3 || password.count < 8)
                     }
-                } else {
-                    Section("Account") {
-                        Label("Signed in", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text("Account status: active")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("Your account name and password are hidden in Settings.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Button("Sign out", role: .destructive) { cloud.signOut() }
-                    }
+                    Text("Accounts are local to this device. They do not sync between devices or grant GitHub access.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Privacy") {
-                    Text("Passwords are sent only to your configured authentication provider over HTTPS. They are never written into the app source or displayed in Settings.")
+                Section("GitHub connection") {
+                    TextField("GitHub username", text: $store.githubUsername)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    SecureField("GitHub Personal Access Token", text: $store.githubToken)
+                    Button("Save GitHub connection") {
+                        Task { await store.saveGitHubCredentials() }
+                    }
+                    Link("Create a GitHub token", destination: URL(string: "https://github.com/settings/personal-access-tokens")!)
+                    Text("Use a token with the repository permissions required for your actions. The token is stored in Keychain. GitHub does not accept normal account passwords for API access.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Device") {
+                    Label(store.deviceSummary, systemImage: "iphone")
+                    Button("Refresh device information") { store.refreshDeviceSummary() }
+                }
+                Section("Build") {
+                    Link("View and download latest build", destination: URL(string: ITConfig.buildsURL)!)
+                    Text("Download the iTools-unsigned-ipa artifact from a successful Actions run. It must be signed before installation.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Help") {
+                    Link("iTools GitHub repository", destination: URL(string: "https://github.com/\(ITConfig.officialOwner)/\(ITConfig.officialRepository)")!)
+                    Text("iOS does not permit silent IPA installation. iTools can upload, host and share IPA files, but installation must be completed with a compatible sideloading workflow.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .navigationTitle("Account")
+            .navigationTitle("Settings")
         }
     }
 }
-
-// MARK: - Simple IPA scanner
-
-struct ITScannerView: View {
-    @State private var showingPicker = false
-    @State private var report = ""
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("IPA quick check").font(.largeTitle.bold())
-            Text("Checks the IPA archive structure and selected suspicious file-path terms. It cannot detect all malware or certify safety.")
-                .foregroundStyle(.secondary)
-            Button("Choose IPA") { showingPicker = true }.buttonStyle(.borderedProminent)
-            Text(report).font(.callout)
-            Spacer()
-        }.padding()
-        .fileImporter(isPresented: $showingPicker,
-                      allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data]) { result in
-            do {
-                let url = try result.get()
-                let access = url.startAccessingSecurityScopedResource()
-                defer { if access { url.stopAccessingSecurityScopedResource() } }
-                let data = try Data(contentsOf: url)
-                let text = String(decoding: data.prefix(2_000_000), as: UTF8.self).lowercased()
-                let terms = ["keylogger", "stealer", "backdoor", "exfiltrate"]
-                let hits = terms.filter { text.contains($0) }
-                report = hits.isEmpty
-                    ? "No obvious keyword indicators found. This does NOT mean the IPA is safe."
-                    : "Warning: found keyword indicators: \(hits.joined(separator: ", ")). Review this IPA carefully."
-            } catch { report = error.localizedDescription }
-        }
-    }
-}
-
-/*
-SUPABASE SETUP — run this SQL in your Supabase SQL Editor.
-
-create table public.repos (
-  id uuid primary key default gen_random_uuid(),
-  owner_id uuid default auth.uid() references auth.users(id) on delete cascade,
-  title text not null,
-  slug text not null unique,
-  is_public boolean not null default false,
-  created_at timestamptz not null default now()
-);
-
-create table public.apps (
-  id uuid primary key default gen_random_uuid(),
-  repo_id uuid not null references public.repos(id) on delete cascade,
-  name text not null,
-  description text not null default '',
-  ipa_url text not null,
-  icon_url text,
-  created_at timestamptz not null default now()
-);
-
-alter table public.repos enable row level security;
-alter table public.apps enable row level security;
-
-create policy "public repos are readable"
-on public.repos for select using (is_public = true or auth.uid() = owner_id);
-
-create policy "users create their own repos"
-on public.repos for insert with check (auth.uid() = owner_id);
-
-create policy "owners update repos"
-on public.repos for update using (auth.uid() = owner_id)
-with check (auth.uid() = owner_id);
-
-create policy "apps in public repos are readable"
-on public.apps for select using (
-  exists (select 1 from public.repos r
-          where r.id = repo_id and (r.is_public = true or r.owner_id = auth.uid()))
-);
-
-create policy "owners publish apps"
-on public.apps for insert with check (
-  exists (select 1 from public.repos r
-          where r.id = repo_id and r.owner_id = auth.uid())
-);
-
--- Create a Storage bucket named itools-files and set it to PUBLIC.
--- For production, add Storage policies so authenticated users can upload,
--- and validate file size/type on the server.
---
--- Create the pre-added official repo record from a trusted admin session:
--- title = 'iTools Official'
--- slug = 'itools.official.repo'
--- is_public = true
--- owner_id = the UUID of the official publisher account.
---
--- IMPORTANT: the app must use the Supabase anon/public key only.
--- Never use a service_role key in an iOS app. The account password supplied
--- in chat is intentionally not embedded in this source.
-*/
