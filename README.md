@@ -1,16 +1,16 @@
 # iTools
 
-An iOS 15+ app for exploring tools and community repositories, sharing IPA files with a compatible sideloading app, and checking basic IPA indicators. The app icon is in `App/Assets.xcassets`.
+An iOS 15+ app for discovering Apple-device apps, browsing community GitHub repositories, and following installation guides. App download links can point to GitHub release assets or shared Google Drive files.
 
 ## Build an unsigned IPA on GitHub
 
-The **CI iTools** GitHub Actions workflow builds the simulator app and an unsigned iOS IPA when changes are pushed to `main`. To run it manually, open the repository's **Actions** tab, choose **CI iTools**, and select **Run workflow**. Open a successful run and download the `iTools-unsigned-ipa` artifact. The app's Home and Settings screens also link to this workflow.
+The **CI iTools** GitHub Actions workflow builds the simulator app and an unsigned iOS IPA when changes are pushed to `main`. To run it manually, open the repository's **Actions** tab, choose **CI iTools**, and select **Run workflow**. Open a successful run and download the `iTools-unsigned-ipa` artifact.
 
 The IPA is unsigned. Sign it with an authorized signing method before installing it on a device. The GitHub Actions artifact is temporary and may require signing in to GitHub to download.
 
 ## GitHub connection and assets
 
-Local iTools accounts are stored on the device and do not sync. GitHub repository creation and catalogue updates require the user's own Personal Access Token, which the app stores in Keychain. App listings take a public HTTPS download URL; the IPA can stay hosted on a GitHub release or a shared Google Drive file. Drive folder links are not supported. Do not embed a token or shared password in the app.
+First launch offers optional GitHub and appearance setup, which can be skipped. GitHub repository creation and catalogue updates require the user's own Personal Access Token, which the app stores in Keychain. App listings take a public HTTPS download URL; the IPA can stay hosted on a GitHub release or a shared Google Drive file. Drive folder links are not supported. Do not embed a token or shared password in the app. Source submissions open an issue in this repository for review.
 
 Add `SideStore.png`, `AltStore.png`, `LiveContainer.png`, and `Nyxian.png` to the asset catalog. Add `Nyxian.ipa` to Copy Bundle Resources if the bundled Nyxian download is desired. These files are not included in this repository.
 

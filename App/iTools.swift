@@ -1,4 +1,4 @@
-// iTools - iOS 16+
+// iTools - iOS 15+
 // Add SideStore.png, AltStore.png, LiveContainer.png and Nyxian.png to the asset catalog.
 // Add Nyxian.ipa if the bundled Nyxian download is desired.
 // Never put a GitHub token or shared password in the app binary.
@@ -11,12 +11,11 @@ import Security
 // MARK: - Configuration
 
 enum ITConfig {
-    static let officialOwner = "SolarTechiTools"
-    static let officialRepository = "iTools"
+    static let officialOwner = "illiatysh67-code"
+    static let officialRepository = "my-new-ios-app"
     static let officialSlug = "itools.official.repo"
     static let catalogPath = "sources.json"
     static let appsPath = "itools-apps.json"
-    static let buildsURL = "https://github.com/illiatysh67-code/my-new-ios-app/actions/workflows/ci-itools.yml"
     static let nyxianDownload = "https://drive.google.com/drive/u/6/folders/1NxwSVGQjBhigWdP7gMhC_5G6LgBCFoOU"
     static let combinedTutorial = "https://livecontainer.github.io/docs/installation/lc_sidestore"
 }
@@ -71,7 +70,6 @@ final class ITStore: ObservableObject {
     @Published var apps: [GitHubApp] = []
     @Published var message: String?
     @Published var isBusy = false
-    @Published var signedInUsername: String?
     @Published var isOfficialUnlocked = false
     @Published var githubUsername = ""
     @Published var githubToken = ""
@@ -80,12 +78,14 @@ final class ITStore: ObservableObject {
     private let defaults = UserDefaults.standard
     private let repoKey = "itools.saved.github.sources"
     private let tokenService = "com.itools.github.token"
-    private let accountService = "com.itools.local.accounts"
 
     init() {
+        if defaults.string(forKey: "itools.backgroundHex") == "#101827" {
+            defaults.set("", forKey: "itools.backgroundHex")
+        }
         loadLocalRepos()
-        signedInUsername = defaults.string(forKey: "itools.signed.in")
         refreshDeviceSummary()
+        repos.removeAll { $0.isOfficial && $0.id != officialRepo.id }
         if !repos.contains(where: { $0.isOfficial }) {
             repos.insert(officialRepo, at: 0)
             saveLocalRepos()
@@ -133,58 +133,34 @@ final class ITStore: ObservableObject {
         SecItemAdd(item as CFDictionary, nil)
     }
 
-    func signUp(username: String, password: String) {
-        let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard cleanUsername.count >= 3, password.count >= 8 else {
-            message = "Username must be at least 3 characters and password at least 8 characters."
-            return
-        }
-        guard readSecret(service: accountService, account: cleanUsername) == nil else {
-            message = "That username already exists on this device."
-            return
-        }
-        writeSecret(password, service: accountService, account: cleanUsername)
-        signIn(username: cleanUsername, password: password)
-        message = "Account created on this device."
-    }
-
-    func signIn(username: String, password: String) {
-        let cleanUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard readSecret(service: accountService, account: cleanUsername) == password else {
-            message = "Incorrect username or password. Local accounts do not sync between devices."
-            return
-        }
-        signedInUsername = cleanUsername
-        defaults.set(cleanUsername, forKey: "itools.signed.in")
-        message = "Signed in."
-    }
-
-    func signOut() {
-        signedInUsername = nil
-        defaults.removeObject(forKey: "itools.signed.in")
-    }
-
-    func saveGitHubCredentials() async {
+    func saveGitHubCredentials() async -> Bool {
         let cleanToken = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanToken.isEmpty else {
             message = "Enter a GitHub Personal Access Token first."
-            return
+            return false
         }
-        writeSecret(cleanToken, service: tokenService, account: "token")
-        defaults.set(githubUsername, forKey: "itools.github.username")
+        let previousToken = githubToken
+        githubToken = cleanToken
         do {
             let (data, _) = try await api("user")
             let profile = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            let authenticatedUsername = profile?["login"] as? String ?? ""
+            guard let authenticatedUsername = profile?["login"] as? String else {
+                throw NSError(domain: "iToolsGitHub", code: 401,
+                              userInfo: [NSLocalizedDescriptionKey: "GitHub did not return an account name for this token."])
+            }
+            writeSecret(cleanToken, service: tokenService, account: "token")
             githubUsername = authenticatedUsername
             defaults.set(authenticatedUsername, forKey: "itools.github.username")
             isOfficialUnlocked = authenticatedUsername.caseInsensitiveCompare(ITConfig.officialOwner) == .orderedSame
             message = isOfficialUnlocked
                 ? "GitHub connected as the official repository owner. Repository permissions are still enforced by GitHub."
                 : "GitHub connected. The token is stored securely in Keychain."
+            return true
         } catch {
+            githubToken = previousToken
             isOfficialUnlocked = false
             message = error.localizedDescription
+            return false
         }
     }
 
@@ -376,8 +352,10 @@ final class ITStore: ObservableObject {
             message = "Could not create the GitHub submission link."
             return
         }
-        await UIApplication.shared.open(url)
-        message = "Opened a GitHub source submission. A maintainer must approve it before it syncs to everyone."
+        let opened = await UIApplication.shared.open(url)
+        message = opened
+            ? "Opened a source submission in the iTools GitHub repository. A maintainer must approve it before it appears in the shared catalogue."
+            : "Could not open the GitHub issue page. Check your internet connection and try again."
     }
 
     func refreshOfficialCatalogue() async {
@@ -432,13 +410,10 @@ extension JSONEncoder {
 @main
 struct iToolsApp: App {
     @StateObject private var store = ITStore()
-    @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
     var body: some Scene {
         WindowGroup {
-            ITMainView()
+            ITAppRootView()
                 .environmentObject(store)
-                .preferredColorScheme(.dark)
-                .tint(Color(hex: accentHex))
         }
     }
 }
@@ -493,9 +468,9 @@ struct ITMainView: View {
 
 struct ITHomeView: View {
     @EnvironmentObject var store: ITStore
-    @AppStorage("itools.bannerHex") private var bannerHex = "#1687FF"
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
-    @AppStorage("itools.backgroundHex") private var backgroundHex = "#101827"
+    @AppStorage("itools.backgroundHex") private var backgroundHex = ""
     var body: some View {
         ITNavigationContainer {
             List {
@@ -503,40 +478,18 @@ struct ITHomeView: View {
                     Text("iTools").font(.largeTitle.bold())
                     Text("Apps, GitHub repositories and community sources.")
                         .foregroundStyle(.secondary)
-                    HStack(spacing: 12) {
-                        Image(systemName: "sparkles.rectangle.stack.fill")
-                            .font(.system(size: 28)).foregroundStyle(.white)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Discover apps with iTools").font(.headline).foregroundStyle(.white)
-                            Text("Browse sources, download IPAs and follow setup guides.")
-                                .font(.caption).foregroundStyle(.white.opacity(0.85))
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .padding(16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(hex: bannerHex), in: RoundedRectangle(cornerRadius: 12))
                 }
                 Section("Featured apps") {
                     ForEach(ITBuiltinApp.all) { app in
                         NavigationLink { ITBuiltinDetail(app: app) } label: { ITBuiltinRow(app: app) }
                     }
                 }
-                Section("Build") {
-                    if let buildsURL = URL(string: ITConfig.buildsURL) {
-                        Link(destination: buildsURL) {
-                            Label("View and download latest build", systemImage: "arrow.down.to.line")
-                        }
-                    }
-                    Text("Open the latest successful run and download the iTools-unsigned-ipa artifact.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 Section("Device") {
                     Label(store.deviceSummary, systemImage: "iphone")
                 }
             }
             .modifier(ITScrollContentBackgroundModifier())
-            .background(Color(hex: backgroundHex))
+            .background(ITTheme.background(hex: backgroundHex, scheme: colorScheme))
             .navigationTitle("Home")
         }
         .tint(Color(hex: accentHex))
@@ -610,7 +563,7 @@ struct ITAppIcon: View {
                     Image("SideStore").resizable().scaledToFill().frame(width: size / 2, height: size)
                 }
                 .clipped()
-            } else if UIImage(named: name) != nil {
+            } else if name != "AltStore", UIImage(named: name) != nil {
                 Image(name).resizable().scaledToFill()
             } else {
                 Image(systemName: fallbackSymbol)
@@ -702,6 +655,8 @@ struct ITShareSheet: UIViewControllerRepresentable {
 }
 
 struct ITAppsView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("itools.backgroundHex") private var backgroundHex = ""
     @State private var query = ""
     private var filtered: [ITBuiltinApp] {
         query.isEmpty ? ITBuiltinApp.all : ITBuiltinApp.all.filter {
@@ -713,38 +668,25 @@ struct ITAppsView: View {
             List(filtered) { app in
                 NavigationLink { ITBuiltinDetail(app: app) } label: { ITBuiltinRow(app: app) }
             }
+            .modifier(ITScrollContentBackgroundModifier())
+            .background(ITTheme.background(hex: backgroundHex, scheme: colorScheme))
             .navigationTitle("Apps")
             .searchable(text: $query)
+            .animation(.easeInOut(duration: 0.18), value: query)
         }
     }
 }
 
 struct ITSourcesView: View {
     @EnvironmentObject var store: ITStore
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
+    @AppStorage("itools.backgroundHex") private var backgroundHex = ""
     @State private var showAdd = false
     @State private var showCreate = false
     var body: some View {
         ITNavigationContainer {
             List {
-                Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
-                            Text("BETA FEATURE").font(.caption.bold()).foregroundStyle(.red)
-                            Spacer()
-                            Text("BETA")
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(Color.red.opacity(0.16), in: Capsule())
-                                .foregroundStyle(.red)
-                        }
-                        Text("Sources are in beta and may not work as expected. We're working to improve them.")
-                            .font(.footnote)
-                    }
-                    .padding(.vertical, 5)
-                    .listRowBackground(Color.red.opacity(0.09))
-                }
                 Section("Repositories") {
                     ForEach(store.repos) { repo in
                         NavigationLink { ITRepositoryView(repo: repo) } label: {
@@ -776,6 +718,8 @@ struct ITSourcesView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .modifier(ITScrollContentBackgroundModifier())
+            .background(ITTheme.background(hex: backgroundHex, scheme: colorScheme))
             .navigationTitle("Sources")
             .sheet(isPresented: $showAdd) { ITAddSourceSheet() }
             .sheet(isPresented: $showCreate) { ITCreateGitHubRepoSheet() }
@@ -832,6 +776,8 @@ struct ITCreateGitHubRepoSheet: View {
 
 struct ITRepositoryView: View {
     @EnvironmentObject var store: ITStore
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("itools.backgroundHex") private var backgroundHex = ""
     let repo: GitHubRepo
     @State private var showUpload = false
     var body: some View {
@@ -881,6 +827,8 @@ struct ITRepositoryView: View {
                 }
             }
         }
+        .modifier(ITScrollContentBackgroundModifier())
+        .background(ITTheme.background(hex: backgroundHex, scheme: colorScheme))
         .navigationTitle("Repository")
         .task { await store.loadApps(for: repo) }
         .refreshable { await store.loadApps(for: repo) }
@@ -897,7 +845,7 @@ struct ITUploadAppSheet: View {
     @State private var version = "1.0.1"
     @State private var downloadURL = ""
     @State private var iconData: Data?
-    @State private var showIcon = false
+    @State private var showIconPicker = false
 
     var body: some View {
         ITNavigationContainer {
@@ -915,7 +863,7 @@ struct ITUploadAppSheet: View {
                         .keyboardType(.URL)
                     Text("Paste a GitHub release asset URL or a shared Google Drive file link. Drive folder links are not supported.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button { showIcon = true } label: {
+                    Button { showIconPicker = true } label: {
                         Label(iconData == nil ? "Choose app icon from Photos" : "Change selected app icon",
                               systemImage: "photo")
                     }
@@ -947,19 +895,10 @@ struct ITUploadAppSheet: View {
             }
             .navigationTitle("Add app link")
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Cancel") { dismiss() } } }
-            .fileImporter(isPresented: $showIcon, allowedContentTypes: [.image]) { result in
-                do {
-                    let url = try result.get()
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    guard let image = UIImage(data: try Data(contentsOf: url)),
-                          let jpeg = image.jpegData(compressionQuality: 0.85) else {
-                        store.message = "The selected image could not be read."
-                        return
-                    }
+            .sheet(isPresented: $showIconPicker) {
+                ITPhotoPicker { image in
+                    guard let image, let jpeg = image.jpegData(compressionQuality: 0.85) else { return }
                     iconData = jpeg
-                } catch {
-                    store.message = error.localizedDescription
                 }
             }
         }
@@ -968,38 +907,12 @@ struct ITUploadAppSheet: View {
 
 struct ITSettingsView: View {
     @EnvironmentObject var store: ITStore
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
-    @AppStorage("itools.bannerHex") private var bannerHex = "#1687FF"
-    @AppStorage("itools.backgroundHex") private var backgroundHex = "#101827"
-    @State private var username = ""
-    @State private var password = ""
-    @State private var createAccount = false
+    @AppStorage("itools.backgroundHex") private var backgroundHex = ""
     var body: some View {
         ITNavigationContainer {
             Form {
-                Section("iTools account") {
-                    if let current = store.signedInUsername {
-                        Label("Signed in as \(current)", systemImage: "person.crop.circle.fill")
-                        Button("Sign out", role: .destructive) { store.signOut() }
-                    } else {
-                        Picker("Account action", selection: $createAccount) {
-                            Text("Sign in").tag(false)
-                            Text("Create account").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                        TextField("Username", text: $username)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        SecureField("Password", text: $password)
-                        Button(createAccount ? "Create account" : "Sign in") {
-                            if createAccount { store.signUp(username: username, password: password) }
-                            else { store.signIn(username: username, password: password) }
-                            password = ""
-                        }
-                        .disabled(username.count < 3 || password.count < 8)
-                    }
-                    Text("Accounts are local to this device. They do not sync between devices or grant GitHub access.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 Section("GitHub connection") {
                     TextField("GitHub username", text: $store.githubUsername)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -1016,28 +929,21 @@ struct ITSettingsView: View {
                         get: { Color(hex: accentHex) },
                         set: { accentHex = $0.hexString ?? "#1687FF" }
                     ), supportsOpacity: false)
-                    ColorPicker("App banner colour", selection: Binding(
-                        get: { Color(hex: bannerHex) },
-                        set: { bannerHex = $0.hexString ?? "#1687FF" }
-                    ), supportsOpacity: false)
                     ColorPicker("Background colour", selection: Binding(
-                        get: { Color(hex: backgroundHex) },
-                        set: { backgroundHex = $0.hexString ?? "#101827" }
+                        get: { ITTheme.background(hex: backgroundHex, scheme: colorScheme) },
+                        set: { backgroundHex = $0.hexString ?? "" }
                     ), supportsOpacity: false)
-                    Button("Reset appearance to default blue") {
+                    Button("Use device appearance for background") {
+                        backgroundHex = ""
+                    }
+                    Button("Reset appearance") {
                         accentHex = "#1687FF"
-                        bannerHex = "#1687FF"
-                        backgroundHex = "#101827"
+                        backgroundHex = ""
                     }
                 }
                 Section("Device") {
                     Label(store.deviceSummary, systemImage: "iphone")
                     Button("Refresh device information") { store.refreshDeviceSummary() }
-                }
-                Section("Build") {
-                    Link("View and download latest build", destination: URL(string: ITConfig.buildsURL)!)
-                    Text("Download the iTools-unsigned-ipa artifact from a successful Actions run. It must be signed before installation.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Help") {
                     Link("iTools GitHub repository", destination: URL(string: "https://github.com/\(ITConfig.officialOwner)/\(ITConfig.officialRepository)")!)
@@ -1046,7 +952,7 @@ struct ITSettingsView: View {
                 }
             }
             .modifier(ITScrollContentBackgroundModifier())
-            .background(Color(hex: backgroundHex))
+            .background(ITTheme.background(hex: backgroundHex, scheme: colorScheme))
             .navigationTitle("Settings")
         }
         .tint(Color(hex: accentHex))
