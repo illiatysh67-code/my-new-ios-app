@@ -92,6 +92,7 @@ private struct PublicGitHubRelease: Decodable {
 // MARK: - GitHub and local account state
 
 @MainActor
+@available(iOS 15.0, *)
 final class ITStore: ObservableObject {
     @Published var repos: [GitHubRepo] = []
     @Published var apps: [GitHubApp] = []
@@ -287,6 +288,7 @@ final class ITStore: ObservableObject {
 
     func loadApps(for repo: GitHubRepo) async {
         isBusy = true
+        apps = []
         defer { isBusy = false }
         do {
             let address = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.repo)/HEAD/iTools/\(ITConfig.appsPath)"
@@ -329,12 +331,12 @@ final class ITStore: ObservableObject {
                 }
             }
             apps = releaseApps
-            message = apps.isEmpty
+            message = apps.isEmpty && !repo.isOfficial
                 ? "No public app catalogue or IPA assets were found in this repository's releases."
                 : nil
         } catch {
             apps = []
-            message = error.localizedDescription
+            message = repo.isOfficial ? nil : error.localizedDescription
         }
     }
 
@@ -443,20 +445,51 @@ final class ITStore: ObservableObject {
     }
 
     func submitSourceToOfficialCatalogue(_ repo: GitHubRepo) async {
-        let body = "Please review and add this iTools source to sources.json:\n\nName: \(repo.name)\nURL: \(repo.htmlURL)\n"
-        var components = URLComponents(string: "https://github.com/\(ITConfig.officialOwner)/\(ITConfig.officialRepository)/issues/new")
-        components?.queryItems = [
-            URLQueryItem(name: "title", value: "Add source: \(repo.fullName)"),
-            URLQueryItem(name: "body", value: body)
-        ]
-        guard let url = components?.url else {
-            message = "Could not create the GitHub submission link."
-            return
+        guard !repo.isOfficial else { return }
+        guard await hasWriteAccess(to: officialRepo) else { return }
+
+        do {
+            let path = "repos/\(ITConfig.officialOwner)/\(ITConfig.officialRepository)/contents/\(ITConfig.catalogPath)"
+            let (currentData, _) = try await api(path)
+            let currentFile = try JSONSerialization.jsonObject(with: currentData) as? [String: Any]
+            guard let encodedContent = currentFile?["content"] as? String,
+                  let fileData = Data(base64Encoded: encodedContent.filter { !$0.isWhitespace }) else {
+                throw NSError(domain: "iToolsGitHub", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey: "The official sources.json file could not be decoded."])
+            }
+            var catalogue = try JSONDecoder().decode(PublicSourceIndex.self, from: fileData)
+            guard !catalogue.sources.contains(where: {
+                $0.url.caseInsensitiveCompare(repo.htmlURL) == .orderedSame
+            }) else {
+                if !repos.contains(where: { $0.id == repo.id }) {
+                    repos.append(repo)
+                    saveLocalRepos()
+                }
+                message = nil
+                return
+            }
+
+            catalogue.sources.append(SourceEntry(name: repo.name, url: repo.htmlURL))
+            let updatedData = try JSONEncoder.pretty.encode(catalogue)
+            var body: [String: Any] = [
+                "message": "Add public source \(repo.fullName)",
+                "content": updatedData.base64EncodedString()
+            ]
+            if let sha = currentFile?["sha"] as? String { body["sha"] = sha }
+            _ = try await api(path, method: "PUT", body: body)
+
+            if !repos.contains(where: { $0.id == repo.id }) {
+                repos.append(repo)
+                saveLocalRepos()
+            }
+            message = nil
+        } catch {
+            let detail = error.localizedDescription
+            message = detail.localizedCaseInsensitiveContains("resource not accessible by personal access token") ||
+                detail.localizedCaseInsensitiveContains("insufficient permission")
+                ? "This token cannot publish to the official catalogue. Grant Contents: Read and write for this repository."
+                : detail
         }
-        let opened = await UIApplication.shared.open(url)
-        message = opened
-            ? "Opened a source submission in the iTools GitHub repository. A maintainer must approve it before it appears in the shared catalogue."
-            : "Could not open the GitHub issue page. Check your internet connection and try again."
     }
 
     func refreshOfficialCatalogue() async {
@@ -508,17 +541,7 @@ extension JSONEncoder {
 
 // MARK: - App
 
-@main
-struct iToolsApp: App {
-    @StateObject private var store = ITStore()
-    var body: some Scene {
-        WindowGroup {
-            ITAppRootView()
-                .environmentObject(store)
-        }
-    }
-}
-
+@available(iOS 15.0, *)
 struct ITNavigationContainer<Content: View>: View {
     let content: Content
 
@@ -537,6 +560,7 @@ struct ITNavigationContainer<Content: View>: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITScrollContentBackgroundModifier: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -548,6 +572,7 @@ struct ITScrollContentBackgroundModifier: ViewModifier {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITMainView: View {
     @EnvironmentObject var store: ITStore
     var body: some View {
@@ -567,6 +592,7 @@ struct ITMainView: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITHomeView: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.colorScheme) private var colorScheme
@@ -633,6 +659,7 @@ struct ITBuiltinApp: Identifiable {
     ]
 }
 
+@available(iOS 15.0, *)
 struct ITBuiltinRow: View {
     let app: ITBuiltinApp
     var body: some View {
@@ -646,6 +673,7 @@ struct ITBuiltinRow: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITAppIcon: View {
     let name: String
     var size: CGFloat = 56
@@ -684,6 +712,7 @@ struct ITAppIcon: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITBuiltinDetail: View {
     let app: ITBuiltinApp
     @State private var shareItems: [Any] = []
@@ -752,6 +781,7 @@ struct ITBuiltinDetail: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITShareSheet: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController {
@@ -760,6 +790,7 @@ struct ITShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
+@available(iOS 15.0, *)
 struct ITAppsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("itools.backgroundHex") private var backgroundHex = ""
@@ -783,6 +814,7 @@ struct ITAppsView: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITSourcesView: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.colorScheme) private var colorScheme
@@ -834,6 +866,7 @@ struct ITSourcesView: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITAddSourceSheet: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) var dismiss
@@ -854,6 +887,7 @@ struct ITAddSourceSheet: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITCreateGitHubRepoSheet: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) var dismiss
@@ -880,6 +914,7 @@ struct ITCreateGitHubRepoSheet: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITRepositoryView: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) private var dismiss
@@ -952,6 +987,7 @@ struct ITRepositoryView: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITUploadAppSheet: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) var dismiss
@@ -1024,6 +1060,7 @@ struct ITUploadAppSheet: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITSettingsView: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.colorScheme) private var colorScheme
@@ -1078,6 +1115,7 @@ struct ITSettingsView: View {
     }
 }
 
+@available(iOS 15.0, *)
 extension Color {
     init(hex: String) {
         let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)

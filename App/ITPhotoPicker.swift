@@ -2,6 +2,7 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+@available(iOS 15.0, *)
 struct ITPhotoPicker: UIViewControllerRepresentable {
     let onPick: (UIImage?) -> Void
 

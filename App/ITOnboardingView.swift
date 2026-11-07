@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 15.0, *)
 enum ITTheme {
     static let defaultAccent = "#1687FF"
 
@@ -8,6 +9,7 @@ enum ITTheme {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITAppRootView: View {
     @AppStorage("itools.onboarding.complete") private var setupComplete = false
     @AppStorage("itools.accentHex") private var accentHex = ITTheme.defaultAccent
@@ -66,6 +68,7 @@ struct ITAppRootView: View {
     }
 }
 
+@available(iOS 15.0, *)
 struct ITOnboardingView: View {
     @EnvironmentObject private var store: ITStore
     @Environment(\.colorScheme) private var colorScheme
