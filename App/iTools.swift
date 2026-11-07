@@ -884,6 +884,33 @@ struct ITUploadAppSheet: View {
     @State private var makeRelease = false
     @State private var showIPA = false
     @State private var showIcon = false
+
+    private func readIPA(from sourceURL: URL) throws -> Data {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("ipa")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+        var coordinationError: NSError?
+        var copyError: Error?
+        NSFileCoordinator().coordinate(readingItemAt: sourceURL, options: [], error: &coordinationError) { coordinatedURL in
+            do {
+                try FileManager.default.copyItem(at: coordinatedURL, to: temporaryURL)
+            } catch {
+                copyError = error
+            }
+        }
+        if let coordinationError { throw coordinationError }
+        if let copyError { throw copyError }
+
+        let data = try Data(contentsOf: temporaryURL)
+        guard !data.isEmpty else {
+            throw NSError(domain: "iTools", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "The selected IPA file is empty."])
+        }
+        return data
+    }
+
     var body: some View {
         ITNavigationContainer {
             Form {
@@ -935,12 +962,7 @@ struct ITUploadAppSheet: View {
                     }
                     let access = url.startAccessingSecurityScopedResource()
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                    guard !data.isEmpty else {
-                        store.message = "The selected IPA file is empty."
-                        return
-                    }
-                    ipaData = data
+                    ipaData = try readIPA(from: url)
                     ipaName = url.lastPathComponent
                 } catch { store.message = error.localizedDescription }
             }
