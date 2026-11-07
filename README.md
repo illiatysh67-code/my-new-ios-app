@@ -14,6 +14,10 @@ First launch offers optional GitHub and appearance setup, which can be skipped. 
 
 Add `SideStore.png`, `AltStore.png`, `LiveContainer.png`, and `Nyxian.png` to the asset catalog. Add `Nyxian.ipa` to Copy Bundle Resources if the bundled Nyxian download is desired. These files are not included in this repository.
 
+## App icon credits
+
+SideStore, AltStore, and LiveContainer icons are sourced from their respective upstream repositories, each licensed under AGPL-3.0: [SideStore](https://github.com/SideStore/SideStore), [AltStore](https://github.com/altstoreio/AltStore), and [LiveContainer](https://github.com/LiveContainer/LiveContainer). Husk's existing icon is from [Husk](https://github.com/Leviidev/Husk). Nyxian's public source does not declare an asset license, so iTools uses its built-in shield symbol instead of bundling that artwork.
+
 ## Local build
 
 On macOS with Xcode and XcodeGen installed, run:

@@ -669,7 +669,7 @@ struct ITAppIcon: View {
                     Image("SideStore").resizable().scaledToFill().frame(width: size / 2, height: size)
                 }
                 .clipped()
-            } else if name != "AltStore", UIImage(named: name) != nil {
+            } else if UIImage(named: name) != nil {
                 Image(name).resizable().scaledToFill()
             } else {
                 Image(systemName: fallbackSymbol)
