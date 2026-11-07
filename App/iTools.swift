@@ -898,12 +898,21 @@ struct ITUploadAppSheet: View {
             .navigationTitle("Upload app")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
             .fileImporter(isPresented: $showIPA,
-                          allowedContentTypes: [UTType(filenameExtension: "ipa") ?? .data]) { result in
+                          allowedContentTypes: [.item]) { result in
                 do {
                     let url = try result.get()
+                    guard url.pathExtension.lowercased() == "ipa" else {
+                        store.message = "Select an IPA file (.ipa) from Files."
+                        return
+                    }
                     let access = url.startAccessingSecurityScopedResource()
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    ipaData = try Data(contentsOf: url)
+                    let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                    guard !data.isEmpty else {
+                        store.message = "The selected IPA file is empty."
+                        return
+                    }
+                    ipaData = data
                     ipaName = url.lastPathComponent
                 } catch { store.message = error.localizedDescription }
             }
