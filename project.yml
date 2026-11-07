@@ -2,7 +2,7 @@ name: iTools
 options:
   bundleIdPrefix: com.example
   deploymentTarget:
-    iOS: "16.0"
+    iOS: "15.0"
 targets:
   iTools:
     type: application

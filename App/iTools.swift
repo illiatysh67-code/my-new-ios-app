@@ -6,7 +6,6 @@
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
-import PhotosUI
 import Security
 
 // MARK: - Configuration
@@ -427,6 +426,35 @@ struct iToolsApp: App {
     }
 }
 
+struct ITNavigationContainer<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if #available(iOS 16.0, *) {
+            NavigationStack { content }
+        } else {
+            NavigationView { content }
+                .navigationViewStyle(StackNavigationViewStyle())
+        }
+    }
+}
+
+struct ITScrollContentBackgroundModifier: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 16.0, *) {
+            content.scrollContentBackground(.hidden)
+        } else {
+            content
+        }
+    }
+}
+
 struct ITMainView: View {
     @EnvironmentObject var store: ITStore
     var body: some View {
@@ -452,7 +480,7 @@ struct ITHomeView: View {
     @AppStorage("itools.accentHex") private var accentHex = "#1687FF"
     @AppStorage("itools.backgroundHex") private var backgroundHex = "#101827"
     var body: some View {
-        NavigationStack {
+        ITNavigationContainer {
             List {
                 Section {
                     Text("iTools").font(.largeTitle.bold())
@@ -490,7 +518,7 @@ struct ITHomeView: View {
                     Label(store.deviceSummary, systemImage: "iphone")
                 }
             }
-            .scrollContentBackground(.hidden)
+            .modifier(ITScrollContentBackgroundModifier())
             .background(Color(hex: backgroundHex))
             .navigationTitle("Home")
         }
@@ -664,7 +692,7 @@ struct ITAppsView: View {
         }
     }
     var body: some View {
-        NavigationStack {
+        ITNavigationContainer {
             List(filtered) { app in
                 NavigationLink { ITBuiltinDetail(app: app) } label: { ITBuiltinRow(app: app) }
             }
@@ -680,7 +708,7 @@ struct ITSourcesView: View {
     @State private var showAdd = false
     @State private var showCreate = false
     var body: some View {
-        NavigationStack {
+        ITNavigationContainer {
             List {
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
@@ -744,7 +772,7 @@ struct ITAddSourceSheet: View {
     @Environment(\.dismiss) var dismiss
     @State private var url = ""
     var body: some View {
-        NavigationStack {
+        ITNavigationContainer {
             Form {
                 Section("GitHub repository URL") {
                     TextField("https://github.com/owner/repository", text: $url)
@@ -754,7 +782,7 @@ struct ITAddSourceSheet: View {
                     .disabled(url.isEmpty)
             }
             .navigationTitle("Add source")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Cancel") { dismiss() } } }
         }
     }
 }
@@ -765,7 +793,7 @@ struct ITCreateGitHubRepoSheet: View {
     @State private var url = ""
     @State private var isPrivate = false
     var body: some View {
-        NavigationStack {
+        ITNavigationContainer {
             Form {
                 Section("Repository URL") {
                     TextField("https://github.com/yourname/new-ios-app", text: $url)
@@ -780,7 +808,7 @@ struct ITCreateGitHubRepoSheet: View {
                 .disabled(url.isEmpty || store.githubToken.isEmpty)
             }
             .navigationTitle("New GitHub repository")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Cancel") { dismiss() } } }
         }
     }
 }
@@ -855,9 +883,9 @@ struct ITUploadAppSheet: View {
     @State private var ipaName = "Choose IPA file"
     @State private var makeRelease = false
     @State private var showIPA = false
-    @State private var selectedIcon: PhotosPickerItem?
+    @State private var showIcon = false
     var body: some View {
-        NavigationStack {
+        ITNavigationContainer {
             Form {
                 Section("App details") {
                     TextField("App name", text: $name)
@@ -867,7 +895,7 @@ struct ITUploadAppSheet: View {
                 }
                 Section("Files") {
                     Button { showIPA = true } label: { Label(ipaName, systemImage: "doc.zipper") }
-                    PhotosPicker(selection: $selectedIcon, matching: .images, photoLibrary: .shared()) {
+                    Button { showIcon = true } label: {
                         Label(iconData == nil ? "Choose app icon from Photos" : "Change selected app icon",
                               systemImage: "photo")
                     }
@@ -896,7 +924,7 @@ struct ITUploadAppSheet: View {
                           (repo.isOfficial && !store.isOfficialUnlocked))
             }
             .navigationTitle("Upload app")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Cancel") { dismiss() } } }
             .fileImporter(isPresented: $showIPA,
                           allowedContentTypes: [.item]) { result in
                 do {
@@ -916,18 +944,19 @@ struct ITUploadAppSheet: View {
                     ipaName = url.lastPathComponent
                 } catch { store.message = error.localizedDescription }
             }
-            .onChange(of: selectedIcon) { item in
-                guard let item else { return }
-                Task {
-                    do {
-                        if let data = try await item.loadTransferable(type: Data.self),
-                           let image = UIImage(data: data),
-                           let jpeg = image.jpegData(compressionQuality: 0.85) {
-                            iconData = jpeg
-                        }
-                    } catch {
-                        store.message = error.localizedDescription
+            .fileImporter(isPresented: $showIcon, allowedContentTypes: [.image]) { result in
+                do {
+                    let url = try result.get()
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    guard let image = UIImage(data: try Data(contentsOf: url)),
+                          let jpeg = image.jpegData(compressionQuality: 0.85) else {
+                        store.message = "The selected image could not be read."
+                        return
                     }
+                    iconData = jpeg
+                } catch {
+                    store.message = error.localizedDescription
                 }
             }
         }
@@ -943,7 +972,7 @@ struct ITSettingsView: View {
     @State private var password = ""
     @State private var createAccount = false
     var body: some View {
-        NavigationStack {
+        ITNavigationContainer {
             Form {
                 Section("iTools account") {
                     if let current = store.signedInUsername {
@@ -1013,7 +1042,7 @@ struct ITSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .scrollContentBackground(.hidden)
+            .modifier(ITScrollContentBackgroundModifier())
             .background(Color(hex: backgroundHex))
             .navigationTitle("Settings")
         }

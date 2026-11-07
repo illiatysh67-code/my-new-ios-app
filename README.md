@@ -1,6 +1,6 @@
 # iTools
 
-An iOS 16+ app for exploring tools and community repositories, sharing IPA files with a compatible sideloading app, and checking basic IPA indicators. The app icon is in `App/Assets.xcassets`.
+An iOS 15+ app for exploring tools and community repositories, sharing IPA files with a compatible sideloading app, and checking basic IPA indicators. The app icon is in `App/Assets.xcassets`.
 
 ## Build an unsigned IPA on GitHub
 
