@@ -889,7 +889,7 @@ struct ITUploadAppSheet: View {
             Form {
                 Section("App details") {
                     TextField("App name", text: $name)
-                    TextField("Description", text: $details, axis: .vertical)
+                    TextField("Description", text: $details)
                     TextField("Version number", text: $version)
                         .keyboardType(.numbersAndPunctuation)
                 }
