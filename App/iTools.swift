@@ -16,8 +16,11 @@ enum ITConfig {
     static let officialSlug = "itools.official.repo"
     static let catalogPath = "sources.json"
     static let appsPath = "itools-apps.json"
+    static let maximumAppListings = 1000
     static let nyxianDownload = "https://drive.google.com/drive/u/6/folders/1NxwSVGQjBhigWdP7gMhC_5G6LgBCFoOU"
     static let combinedTutorial = "https://livecontainer.github.io/docs/installation/lc_sidestore"
+    static let huskDownload = "https://github.com/Leviidev/Husk/releases/latest/download/Husk.ipa"
+    static let huskInstallGuide = "https://itslevii.dev/docs/install"
 }
 
 // MARK: - Models
@@ -94,7 +97,6 @@ final class ITStore: ObservableObject {
     @Published var apps: [GitHubApp] = []
     @Published var message: String?
     @Published var isBusy = false
-    @Published var isOfficialUnlocked = false
     @Published var githubUsername = ""
     @Published var githubToken = ""
     @Published var deviceSummary = ""
@@ -175,14 +177,10 @@ final class ITStore: ObservableObject {
             writeSecret(cleanToken, service: tokenService, account: "token")
             githubUsername = authenticatedUsername
             defaults.set(authenticatedUsername, forKey: "itools.github.username")
-            isOfficialUnlocked = authenticatedUsername.caseInsensitiveCompare(ITConfig.officialOwner) == .orderedSame
-            message = isOfficialUnlocked
-                ? "GitHub connected as the official repository owner. Repository permissions are still enforced by GitHub."
-                : "GitHub connected. The token is stored securely in Keychain."
+            message = "GitHub connected as \(authenticatedUsername). The token is stored securely in Keychain."
             return true
         } catch {
             githubToken = previousToken
-            isOfficialUnlocked = false
             message = error.localizedDescription
             return false
         }
@@ -297,31 +295,40 @@ final class ITStore: ObservableObject {
             if (catalogueResponse as? HTTPURLResponse)?.statusCode == 200,
                let catalogueApps = try? JSONDecoder().decode([GitHubApp].self, from: catalogueData),
                !catalogueApps.isEmpty {
-                apps = catalogueApps
+                let builtInCount = repo.isOfficial ? ITBuiltinApp.all.count : 0
+                apps = Array(catalogueApps.prefix(max(0, ITConfig.maximumAppListings - builtInCount)))
                 message = nil
                 return
             }
 
-            let releasesAddress = "https://api.github.com/repos/\(repo.owner)/\(repo.repo)/releases?per_page=20"
-            guard let releasesURL = URL(string: releasesAddress) else { throw URLError(.badURL) }
-            var request = URLRequest(url: releasesURL)
-            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-            let (releaseData, releaseResponse) = try await URLSession.shared.data(for: request)
-            guard let http = releaseResponse as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                apps = []
-                message = "Could not read this public repository's releases. Check that the repository is public and try again."
-                return
-            }
-            let releases = try JSONDecoder().decode([PublicGitHubRelease].self, from: releaseData)
-            apps = releases.flatMap { release in
-                release.assets.filter { $0.name.lowercased().hasSuffix(".ipa") }.map { asset in
-                    GitHubApp(name: asset.name, details: release.body ?? "",
-                              ipaPath: asset.browserDownloadURL, iconPath: nil,
-                              releaseURL: release.htmlURL,
-                              version: release.tagName)
+            var releaseApps: [GitHubApp] = []
+            let builtInCount = repo.isOfficial ? ITBuiltinApp.all.count : 0
+            let releaseAppLimit = max(0, ITConfig.maximumAppListings - builtInCount)
+            for page in 1...10 where releaseApps.count < releaseAppLimit {
+                let releasesAddress = "https://api.github.com/repos/\(repo.owner)/\(repo.repo)/releases?per_page=100&page=\(page)"
+                guard let releasesURL = URL(string: releasesAddress) else { throw URLError(.badURL) }
+                var request = URLRequest(url: releasesURL)
+                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+                let (releaseData, releaseResponse) = try await URLSession.shared.data(for: request)
+                guard let http = releaseResponse as? HTTPURLResponse,
+                      (200...299).contains(http.statusCode) else {
+                    throw NSError(domain: "iToolsGitHub", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "Could not read this public repository's releases. Check that the repository is public and try again."])
+                }
+                let releases = try JSONDecoder().decode([PublicGitHubRelease].self, from: releaseData)
+                guard !releases.isEmpty else { break }
+                for release in releases {
+                    for asset in release.assets where asset.name.lowercased().hasSuffix(".ipa") {
+                        releaseApps.append(GitHubApp(name: asset.name, details: release.body ?? "",
+                                                     ipaPath: asset.browserDownloadURL, iconPath: nil,
+                                                     releaseURL: release.htmlURL, version: release.tagName))
+                        if releaseApps.count == releaseAppLimit { break }
+                    }
+                    if releaseApps.count == releaseAppLimit { break }
                 }
             }
+            apps = releaseApps
             message = apps.isEmpty
                 ? "No public app catalogue or IPA assets were found in this repository's releases."
                 : nil
@@ -355,11 +362,40 @@ final class ITStore: ObservableObject {
         return components.url
     }
 
+    private func hasWriteAccess(to repo: GitHubRepo) async -> Bool {
+        do {
+            let (data, _) = try await api("repos/\(repo.owner)/\(repo.repo)")
+            let repository = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if repository?["private"] as? Bool == true {
+                message = "This repository is private. Change its visibility to Public on GitHub so anyone can browse its apps."
+                return false
+            }
+            let permissions = repository?["permissions"] as? [String: Bool] ?? [:]
+            guard permissions["push"] == true || permissions["admin"] == true else {
+                message = "This token can read the repository but cannot publish to it. Connect a token with Contents: Read and write access for this repository."
+                return false
+            }
+            return true
+        } catch {
+            let detail = error.localizedDescription
+            message = detail.localizedCaseInsensitiveContains("resource not accessible by personal access token")
+                ? "This token does not have access to this repository. Select the repository in your GitHub token settings and grant Contents: Read and write."
+                : "Could not verify repository access: \(detail)"
+            return false
+        }
+    }
+
     func publishApp(name: String, details: String, version: String, downloadURL: String,
                     icon: Data?, to repo: GitHubRepo) async -> Bool {
         isBusy = true
         defer { isBusy = false }
         do {
+            guard await hasWriteAccess(to: repo) else {
+                if message == nil {
+                    message = "This GitHub token cannot edit this repository. Connect a token with Contents: Read and write permission for this repository."
+                }
+                return false
+            }
             guard let ipaURL = appDownloadURL(downloadURL) else {
                 throw NSError(domain: "iTools", code: 1,
                               userInfo: [NSLocalizedDescriptionKey: "Enter a public HTTPS link to a GitHub release asset or a shared Google Drive file. Drive folder links are not supported."])
@@ -376,15 +412,32 @@ final class ITStore: ObservableObject {
                                   iconPath: iconURL, releaseURL: nil,
                                   version: version.isEmpty ? nil : version)
             var updatedApps = apps
+            let builtInCount = repo.isOfficial ? ITBuiltinApp.all.count : 0
+            guard updatedApps.count + builtInCount < ITConfig.maximumAppListings else {
+                throw NSError(domain: "iTools", code: 2,
+                              userInfo: [NSLocalizedDescriptionKey: "This repository has reached the \(ITConfig.maximumAppListings)-app limit."])
+            }
+            guard !updatedApps.contains(where: {
+                $0.ipaPath == entry.ipaPath || $0.name.caseInsensitiveCompare(entry.name) == .orderedSame
+            }) else {
+                throw NSError(domain: "iTools", code: 3,
+                              userInfo: [NSLocalizedDescriptionKey: "An app with this name or download link is already listed."])
+            }
             updatedApps.append(entry)
             let encoded = try JSONEncoder.pretty.encode(updatedApps)
             try await uploadFile(data: encoded, filename: ITConfig.appsPath, to: repo,
                                  message: "Update iTools app catalogue")
             apps = updatedApps
-            message = "App download link added to the repository catalogue. The IPA remains hosted at \(ipaURL.host ?? "the supplied host")."
+            message = nil
             return true
         } catch {
-            message = error.localizedDescription
+            let detail = error.localizedDescription
+            if detail.localizedCaseInsensitiveContains("resource not accessible by personal access token") ||
+                detail.localizedCaseInsensitiveContains("insufficient permission") {
+                message = "GitHub rejected the write. Edit your token and grant Contents: Read and write for this repository, then save the token again."
+            } else {
+                message = detail
+            }
             return false
         }
     }
@@ -572,7 +625,11 @@ struct ITBuiltinApp: Identifiable {
               tutorial: ITConfig.combinedTutorial),
           .init(id: "nyxian", name: "Nyxian", subtitle: "Nyxian IPA and installation guide",
               detail: "Download the Nyxian IPA from the supplied Google Drive folder, then follow the installation instructions below.",
-              icon: "Nyxian", ipaResource: "Nyxian", web: ITConfig.nyxianDownload, tutorial: nil)
+              icon: "Nyxian", ipaResource: "Nyxian", web: ITConfig.nyxianDownload, tutorial: nil),
+          .init(id: "husk", name: "Husk", subtitle: "Android apps and games on iPhone",
+              detail: "Husk runs compatible Android apps and games on iPhone using a translation layer or QEMU-based emulation. It requires iOS 15.5 or later; some apps may need JIT. Check the project guide for current compatibility.",
+              icon: "Husk", ipaResource: nil, web: ITConfig.huskDownload,
+              tutorial: ITConfig.huskInstallGuide)
     ]
 }
 
@@ -599,6 +656,7 @@ struct ITAppIcon: View {
         case "AltStore": "storefront.fill"
         case "LiveContainer": "shippingbox.fill"
         case "Nyxian": "bolt.shield.fill"
+        case "Husk": "gamecontroller.fill"
         default: "square.stack.3d.up.fill"
         }
     }
@@ -639,7 +697,7 @@ struct ITBuiltinDetail: View {
                 Button("Get") { get() }
                     .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
                 if let web = app.web, let url = URL(string: web) {
-                    Link("Official releases / website", destination: url)
+                    Link(app.id == "husk" ? "Download Husk IPA" : "Official releases / website", destination: url)
                 }
                 if let tutorial = app.tutorial, let url = URL(string: tutorial) {
                     Link("Open tutorial / setup guide", destination: url)
@@ -824,10 +882,12 @@ struct ITCreateGitHubRepoSheet: View {
 
 struct ITRepositoryView: View {
     @EnvironmentObject var store: ITStore
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("itools.backgroundHex") private var backgroundHex = ""
     let repo: GitHubRepo
     @State private var showUpload = false
+    @State private var didPublishApp = false
     var body: some View {
         List {
             Section {
@@ -836,7 +896,12 @@ struct ITRepositoryView: View {
                 if let url = URL(string: repo.htmlURL) { Link("Open GitHub repository", destination: url) }
             }
             Section("Apps") {
-                if store.apps.isEmpty {
+                if repo.isOfficial {
+                    ForEach(ITBuiltinApp.all) { app in
+                        NavigationLink { ITBuiltinDetail(app: app) } label: { ITBuiltinRow(app: app) }
+                    }
+                }
+                if store.apps.isEmpty && !repo.isOfficial {
                     Text("No app catalogue or public IPA release assets were found in this repository.")
                 }
                 ForEach(store.apps) { app in
@@ -864,10 +929,6 @@ struct ITRepositoryView: View {
                     Label("Add app download link", systemImage: "link")
                 }
                 .disabled(store.githubToken.isEmpty)
-                if repo.isOfficial && !store.isOfficialUnlocked {
-                    Text("Connect a GitHub account with write access to this repository in Settings.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 if !repo.isOfficial {
                     Button("Submit this source to the shared catalogue") {
                         Task { await store.submitSourceToOfficialCatalogue(repo) }
@@ -880,7 +941,14 @@ struct ITRepositoryView: View {
         .navigationTitle("Repository")
         .task { await store.loadApps(for: repo) }
         .refreshable { await store.loadApps(for: repo) }
-        .sheet(isPresented: $showUpload) { ITUploadAppSheet(repo: repo) }
+        .sheet(isPresented: $showUpload, onDismiss: {
+            if didPublishApp {
+                didPublishApp = false
+                dismiss()
+            }
+        }) {
+            ITUploadAppSheet(repo: repo) { didPublishApp = true }
+        }
     }
 }
 
@@ -888,6 +956,7 @@ struct ITUploadAppSheet: View {
     @EnvironmentObject var store: ITStore
     @Environment(\.dismiss) var dismiss
     let repo: GitHubRepo
+    let onPublished: () -> Void
     @State private var name = ""
     @State private var details = ""
     @State private var version = "1.0.1"
@@ -935,11 +1004,13 @@ struct ITUploadAppSheet: View {
                             icon: iconData,
                             to: repo
                         )
-                        if published { dismiss() }
+                        if published {
+                            dismiss()
+                            onPublished()
+                        }
                     }
                 }
-                .disabled(name.isEmpty || downloadURL.isEmpty || store.githubToken.isEmpty || store.isBusy ||
-                          (repo.isOfficial && !store.isOfficialUnlocked))
+                .disabled(name.isEmpty || downloadURL.isEmpty || store.githubToken.isEmpty || store.isBusy)
             }
             .navigationTitle("Add app link")
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Cancel") { dismiss() } } }
@@ -969,7 +1040,7 @@ struct ITSettingsView: View {
                         Task { await store.saveGitHubCredentials() }
                     }
                     Link("Create a GitHub token", destination: URL(string: "https://github.com/settings/personal-access-tokens")!)
-                    Text("Use a token with the repository permissions required for your actions. The token is stored in Keychain. GitHub does not accept normal account passwords for API access.")
+                    Text("For app publishing, select the target repository and grant Contents: Read and write. Repository creation may also require Administration: Read and write. The token is stored in Keychain; GitHub does not accept normal account passwords for API access.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Appearance") {
