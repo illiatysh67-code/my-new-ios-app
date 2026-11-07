@@ -307,36 +307,49 @@ final class ITStore: ObservableObject {
         }
     }
 
-    func publishApp(_ app: GitHubApp, ipa: Data, icon: Data?, to repo: GitHubRepo,
-                    makeRelease: Bool, version: String) async {
+    private func appDownloadURL(_ text: String) -> URL? {
+        guard var components = URLComponents(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
+              components.scheme?.lowercased() == "https",
+              let host = components.host?.lowercased() else { return nil }
+
+        if host == "drive.google.com" {
+            let pathParts = components.path.split(separator: "/").map(String.init)
+            let fileID: String?
+            if let fileIndex = pathParts.firstIndex(of: "d"), pathParts.indices.contains(fileIndex + 1) {
+                fileID = pathParts[fileIndex + 1]
+            } else {
+                fileID = components.queryItems?.first(where: { $0.name == "id" })?.value
+            }
+            guard let fileID, !fileID.isEmpty else { return nil }
+            components.path = "/uc"
+            components.queryItems = [
+                URLQueryItem(name: "export", value: "download"),
+                URLQueryItem(name: "id", value: fileID)
+            ]
+        }
+
+        return components.url
+    }
+
+    func publishApp(name: String, details: String, version: String, downloadURL: String,
+                    icon: Data?, to repo: GitHubRepo) async -> Bool {
         isBusy = true
         defer { isBusy = false }
         do {
-            let safeName = app.name.replacingOccurrences(of: " ", with: "-")
-                .replacingOccurrences(of: "/", with: "-")
-            let ipaName = "\(safeName).ipa"
-            try await uploadFile(data: ipa, filename: ipaName, to: repo, message: "Add \(app.name) IPA")
+            guard let ipaURL = appDownloadURL(downloadURL) else {
+                throw NSError(domain: "iTools", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Enter a public HTTPS link to a GitHub release asset or a shared Google Drive file. Drive folder links are not supported."])
+            }
             var iconURL: String?
             if let icon {
+                let safeName = name.replacingOccurrences(of: " ", with: "-")
+                    .replacingOccurrences(of: "/", with: "-")
                 let iconName = "\(safeName)-icon.png"
-                try await uploadFile(data: icon, filename: iconName, to: repo, message: "Add \(app.name) icon")
+                try await uploadFile(data: icon, filename: iconName, to: repo, message: "Add \(name) icon")
                 iconURL = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.repo)/HEAD/iTools/\(iconName)"
             }
-            var releaseURL: String?
-            if makeRelease && !version.isEmpty {
-                let releaseBody: [String: Any] = [
-                    "tag_name": version,
-                    "name": "\(app.name) \(version)",
-                    "body": "Release published from iTools.",
-                    "draft": false,
-                    "prerelease": false
-                ]
-                let (data, _) = try await api("repos/\(repo.owner)/\(repo.repo)/releases", method: "POST", body: releaseBody)
-                releaseURL = (try JSONSerialization.jsonObject(with: data) as? [String: Any])?["html_url"] as? String
-            }
-            let ipaURL = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.repo)/HEAD/iTools/\(ipaName)"
-            let entry = GitHubApp(name: app.name, details: app.details, ipaPath: ipaURL,
-                                  iconPath: iconURL, releaseURL: releaseURL,
+            let entry = GitHubApp(name: name, details: details, ipaPath: ipaURL.absoluteString,
+                                  iconPath: iconURL, releaseURL: nil,
                                   version: version.isEmpty ? nil : version)
             var updatedApps = apps
             updatedApps.append(entry)
@@ -344,8 +357,12 @@ final class ITStore: ObservableObject {
             try await uploadFile(data: encoded, filename: ITConfig.appsPath, to: repo,
                                  message: "Update iTools app catalogue")
             apps = updatedApps
-            message = "App uploaded to GitHub and added to the repository catalogue."
-        } catch { message = error.localizedDescription }
+            message = "App download link added to the repository catalogue. The IPA remains hosted at \(ipaURL.host ?? "the supplied host")."
+            return true
+        } catch {
+            message = error.localizedDescription
+            return false
+        }
     }
 
     func submitSourceToOfficialCatalogue(_ repo: GitHubRepo) async {
@@ -826,7 +843,7 @@ struct ITRepositoryView: View {
             }
             Section("Apps") {
                 if store.apps.isEmpty {
-                    Text("No iTools apps catalogue found. Upload an app to start this repository.")
+                    Text("No iTools apps catalogue found. Add an app download link to start this repository.")
                 }
                 ForEach(store.apps) { app in
                     HStack {
@@ -850,7 +867,7 @@ struct ITRepositoryView: View {
             }
             Section {
                 Button { showUpload = true } label: {
-                    Label("Upload app to this repository", systemImage: "square.and.arrow.up")
+                    Label("Add app download link", systemImage: "link")
                 }
                 .disabled(store.githubToken.isEmpty)
                 if repo.isOfficial && !store.isOfficialUnlocked {
@@ -878,38 +895,9 @@ struct ITUploadAppSheet: View {
     @State private var name = ""
     @State private var details = ""
     @State private var version = "1.0.1"
-    @State private var ipaData: Data?
+    @State private var downloadURL = ""
     @State private var iconData: Data?
-    @State private var ipaName = "Choose IPA file"
-    @State private var makeRelease = false
-    @State private var showIPA = false
     @State private var showIcon = false
-
-    private func readIPA(from sourceURL: URL) throws -> Data {
-        let temporaryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("ipa")
-        defer { try? FileManager.default.removeItem(at: temporaryURL) }
-
-        var coordinationError: NSError?
-        var copyError: Error?
-        NSFileCoordinator().coordinate(readingItemAt: sourceURL, options: [], error: &coordinationError) { coordinatedURL in
-            do {
-                try FileManager.default.copyItem(at: coordinatedURL, to: temporaryURL)
-            } catch {
-                copyError = error
-            }
-        }
-        if let coordinationError { throw coordinationError }
-        if let copyError { throw copyError }
-
-        let data = try Data(contentsOf: temporaryURL)
-        guard !data.isEmpty else {
-            throw NSError(domain: "iTools", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "The selected IPA file is empty."])
-        }
-        return data
-    }
 
     var body: some View {
         ITNavigationContainer {
@@ -921,7 +909,12 @@ struct ITUploadAppSheet: View {
                         .keyboardType(.numbersAndPunctuation)
                 }
                 Section("Files") {
-                    Button { showIPA = true } label: { Label(ipaName, systemImage: "doc.zipper") }
+                    TextField("Public IPA download link", text: $downloadURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    Text("Paste a GitHub release asset URL or a shared Google Drive file link. Drive folder links are not supported.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button { showIcon = true } label: {
                         Label(iconData == nil ? "Choose app icon from Photos" : "Change selected app icon",
                               systemImage: "photo")
@@ -932,40 +925,28 @@ struct ITUploadAppSheet: View {
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                     }
                 }
-                Section("GitHub Releases") {
-                    Toggle("Create a GitHub release (optional)", isOn: $makeRelease)
-                    Text("The IPA is uploaded to the repository and added to itools-apps.json. The optional release creates a tagged release entry.")
+                Section("Publishing") {
+                    Text("The app link and details are added to this repository's catalogue. The IPA stays hosted at the link you provide.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Button("Upload app") {
-                    guard let ipaData else { return }
-                    let app = GitHubApp(name: name, details: details, ipaPath: "", iconPath: nil,
-                                        releaseURL: nil, version: version.isEmpty ? nil : version)
+                Button("Publish app link") {
                     Task {
-                        await store.publishApp(app, ipa: ipaData, icon: iconData, to: repo,
-                                               makeRelease: makeRelease, version: version)
-                        dismiss()
+                        let published = await store.publishApp(
+                            name: name,
+                            details: details,
+                            version: version,
+                            downloadURL: downloadURL,
+                            icon: iconData,
+                            to: repo
+                        )
+                        if published { dismiss() }
                     }
                 }
-                .disabled(name.isEmpty || ipaData == nil || store.githubToken.isEmpty ||
+                .disabled(name.isEmpty || downloadURL.isEmpty || store.githubToken.isEmpty || store.isBusy ||
                           (repo.isOfficial && !store.isOfficialUnlocked))
             }
-            .navigationTitle("Upload app")
+            .navigationTitle("Add app link")
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Cancel") { dismiss() } } }
-            .fileImporter(isPresented: $showIPA,
-                          allowedContentTypes: [.item]) { result in
-                do {
-                    let url = try result.get()
-                    guard url.pathExtension.lowercased() == "ipa" else {
-                        store.message = "Select an IPA file (.ipa) from Files."
-                        return
-                    }
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    ipaData = try readIPA(from: url)
-                    ipaName = url.lastPathComponent
-                } catch { store.message = error.localizedDescription }
-            }
             .fileImporter(isPresented: $showIcon, allowedContentTypes: [.image]) { result in
                 do {
                     let url = try result.get()

@@ -10,7 +10,7 @@ The IPA is unsigned. Sign it with an authorized signing method before installing
 
 ## GitHub connection and assets
 
-Local iTools accounts are stored on the device and do not sync. GitHub repository creation and uploads require the user's own Personal Access Token, which the app stores in Keychain. Do not embed a token or shared password in the app.
+Local iTools accounts are stored on the device and do not sync. GitHub repository creation and catalogue updates require the user's own Personal Access Token, which the app stores in Keychain. App listings take a public HTTPS download URL; the IPA can stay hosted on a GitHub release or a shared Google Drive file. Drive folder links are not supported. Do not embed a token or shared password in the app.
 
 Add `SideStore.png`, `AltStore.png`, `LiveContainer.png`, and `Nyxian.png` to the asset catalog. Add `Nyxian.ipa` to Copy Bundle Resources if the bundled Nyxian download is desired. These files are not included in this repository.
 
