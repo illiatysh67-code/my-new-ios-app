@@ -62,6 +62,30 @@ struct SourceEntry: Codable, Identifiable {
     let url: String
 }
 
+private struct PublicGitHubRelease: Decodable {
+    let name: String?
+    let tagName: String?
+    let body: String?
+    let htmlURL: String?
+    let assets: [Asset]
+
+    struct Asset: Decodable {
+        let name: String
+        let browserDownloadURL: String
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, body, assets
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+    }
+}
+
 // MARK: - GitHub and local account state
 
 @MainActor
@@ -269,14 +293,38 @@ final class ITStore: ObservableObject {
         do {
             let address = "https://raw.githubusercontent.com/\(repo.owner)/\(repo.repo)/HEAD/iTools/\(ITConfig.appsPath)"
             guard let url = URL(string: address) else { throw URLError(.badURL) }
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                apps = []
-                message = "No \(ITConfig.appsPath) catalogue found yet. Upload an app to create it."
+            let (catalogueData, catalogueResponse) = try await URLSession.shared.data(from: url)
+            if (catalogueResponse as? HTTPURLResponse)?.statusCode == 200,
+               let catalogueApps = try? JSONDecoder().decode([GitHubApp].self, from: catalogueData),
+               !catalogueApps.isEmpty {
+                apps = catalogueApps
+                message = nil
                 return
             }
-            apps = try JSONDecoder().decode([GitHubApp].self, from: data)
-            message = nil
+
+            let releasesAddress = "https://api.github.com/repos/\(repo.owner)/\(repo.repo)/releases?per_page=20"
+            guard let releasesURL = URL(string: releasesAddress) else { throw URLError(.badURL) }
+            var request = URLRequest(url: releasesURL)
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+            let (releaseData, releaseResponse) = try await URLSession.shared.data(for: request)
+            guard let http = releaseResponse as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                apps = []
+                message = "Could not read this public repository's releases. Check that the repository is public and try again."
+                return
+            }
+            let releases = try JSONDecoder().decode([PublicGitHubRelease].self, from: releaseData)
+            apps = releases.flatMap { release in
+                release.assets.filter { $0.name.lowercased().hasSuffix(".ipa") }.map { asset in
+                    GitHubApp(name: asset.name, details: release.body ?? "",
+                              ipaPath: asset.browserDownloadURL, iconPath: nil,
+                              releaseURL: release.htmlURL,
+                              version: release.tagName)
+                }
+            }
+            message = apps.isEmpty
+                ? "No public app catalogue or IPA assets were found in this repository's releases."
+                : nil
         } catch {
             apps = []
             message = error.localizedDescription
@@ -789,7 +837,7 @@ struct ITRepositoryView: View {
             }
             Section("Apps") {
                 if store.apps.isEmpty {
-                    Text("No iTools apps catalogue found. Add an app download link to start this repository.")
+                    Text("No app catalogue or public IPA release assets were found in this repository.")
                 }
                 ForEach(store.apps) { app in
                     HStack {

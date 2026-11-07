@@ -10,7 +10,7 @@ The IPA is unsigned. Sign it with an authorized signing method before installing
 
 ## GitHub connection and assets
 
-First launch offers optional GitHub and appearance setup, which can be skipped. GitHub repository creation and catalogue updates require the user's own Personal Access Token, which the app stores in Keychain. App listings take a public HTTPS download URL; the IPA can stay hosted on a GitHub release or a shared Google Drive file. Drive folder links are not supported. Do not embed a token or shared password in the app. Source submissions open an issue in this repository for review.
+First launch offers optional GitHub and appearance setup, which can be skipped. GitHub repository creation and catalogue updates require the user's own Personal Access Token, which the app stores in Keychain. App listings take a public HTTPS download URL; the IPA can stay hosted on a GitHub release or a shared Google Drive file. Public repositories without an iTools app catalogue are also checked for IPA assets in GitHub Releases. Drive folder links are not supported. Do not embed a token or shared password in the app. Source submissions open an issue in this repository for review.
 
 Add `SideStore.png`, `AltStore.png`, `LiveContainer.png`, and `Nyxian.png` to the asset catalog. Add `Nyxian.ipa` to Copy Bundle Resources if the bundled Nyxian download is desired. These files are not included in this repository.
 

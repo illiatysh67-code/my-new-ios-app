@@ -11,18 +11,58 @@ enum ITTheme {
 struct ITAppRootView: View {
     @AppStorage("itools.onboarding.complete") private var setupComplete = false
     @AppStorage("itools.accentHex") private var accentHex = ITTheme.defaultAccent
+    @State private var showLaunchSplash = false
+    @State private var launchScale: CGFloat = 1
+    @State private var launchOpacity = 1.0
+    @State private var homeScale: CGFloat = 0.78
+    @State private var homeOpacity = 0.0
 
     var body: some View {
-        Group {
-            if setupComplete {
-                ITMainView()
-            } else {
+        ZStack {
+            ITMainView()
+                .opacity(setupComplete ? 1 : homeOpacity)
+                .scaleEffect(setupComplete ? 1 : homeScale)
+
+            if !setupComplete && !showLaunchSplash {
                 ITOnboardingView {
-                    setupComplete = true
+                    finishSetup()
                 }
+            }
+
+            if showLaunchSplash {
+                Image("iToolsLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 112, height: 112)
+                    .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                    .scaleEffect(launchScale)
+                    .opacity(launchOpacity)
+                    .allowsHitTesting(false)
             }
         }
         .tint(Color(hex: accentHex))
+    }
+
+    private func finishSetup() {
+        launchScale = 1
+        launchOpacity = 1
+        homeScale = 0.78
+        homeOpacity = 0
+        showLaunchSplash = true
+        DispatchQueue.main.async {
+            withAnimation(.easeInOut(duration: 2)) {
+                launchScale = 14
+                launchOpacity = 0
+                homeScale = 1
+                homeOpacity = 1
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            setupComplete = true
+            showLaunchSplash = false
+            launchScale = 1
+            launchOpacity = 1
+        }
     }
 }
 
@@ -82,6 +122,7 @@ struct ITOnboardingView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 100, height: 100)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .scaleEffect(step == 0 ? 1 : 0.94)
                 .animation(.spring(response: 0.4, dampingFraction: 0.7), value: step)
             VStack(alignment: .leading, spacing: 10) {
