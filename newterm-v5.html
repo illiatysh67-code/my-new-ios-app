@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NewTerm 3">
+<meta name="theme-color" content="#1c1c1e">
+<title>NewTerm 3 BETA</title>
+<link id="icon" rel="apple-touch-icon" href="">
+<style>
+  :root {
+    --bg: #1c1c1e; --fg: #e6e6e6; --prompt: #e6e6e6;
+    --accent: #f5c518; --bar: #1c1c1e; --tab: #2c2c2e;
+  }
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--fg);
+    font-family: Menlo, "SF Mono", ui-monospace, monospace;
+    overflow: hidden;
+    transition: background .4s ease, color .4s ease;
+  }
+  .hidden { display: none !important; }
+
+  #app {
+    display: flex; flex-direction: column; height: 100%;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  header {
+    flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+    height: 44px; padding: 0 12px;
+    background: var(--bar); border-bottom: 1px solid rgba(0,0,0,.4);
+  }
+  header .title {
+    flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 600 17px -apple-system, system-ui, sans-serif; color: var(--fg);
+  }
+  header .controls { display: flex; gap: 14px; align-items: center; }
+  .icon {
+    background: none; border: 0; padding: 6px; margin: 0;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--accent); -webkit-tap-highlight-color: transparent;
+    transition: transform .15s ease;
+  }
+  .icon:active { transform: scale(.85); }
+  .icon svg { display: block; }
+
+  #row {
+    flex-shrink: 0; display: flex; padding: 8px; align-items: baseline;
+    border-bottom: 1px solid rgba(0,0,0,.4);
+  }
+  #ps { white-space: nowrap; color: var(--prompt); }
+  #in {
+    flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+    color: var(--fg); font: inherit; font-size: 16px; padding: 0; margin: 0;
+    caret-color: var(--accent);
+  }
+  #tab {
+    flex-shrink: 0; height: 30px; line-height: 30px;
+    padding: 0 14px; font: 500 13px -apple-system, system-ui, sans-serif;
+    background: var(--tab); color: var(--fg); width: fit-content;
+  }
+  #out {
+    flex: 1; overflow-y: auto; padding: 8px;
+    font-size: 13px; line-height: 1.35;
+    -webkit-overflow-scrolling: touch;
+  }
+  .line { min-height: 1.35em; white-space: pre-wrap; word-break: break-word; animation: fadeIn .25s ease both; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+  /* Settings sheet */
+  .sheet {
+    position: fixed; inset: 0; z-index: 20;
+    background: var(--bg); color: var(--fg); display: flex; flex-direction: column;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    font-family: -apple-system, system-ui, sans-serif;
+    animation: slideUp .3s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes slideUp { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .sheet-head {
+    flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
+    height: 44px; padding: 0 16px; background: var(--bar); border-bottom: 1px solid rgba(0,0,0,.4);
+  }
+  .sheet-head .title { font: 600 17px -apple-system, system-ui, sans-serif; }
+  .link {
+    background: none; border: 0; padding: 6px 0; margin: 0;
+    color: var(--accent); font: 500 17px -apple-system, system-ui, sans-serif; cursor: pointer;
+  }
+  .sheet-body { flex: 1; overflow-y: auto; padding: 16px; -webkit-overflow-scrolling: touch; }
+  .sheet h3 {
+    margin: 22px 0 8px; font: 600 13px -apple-system, system-ui, sans-serif;
+    opacity: .6; text-transform: uppercase; letter-spacing: .3px;
+  }
+  .cmd-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px; background: var(--tab); border-radius: 10px; margin-bottom: 8px;
+    font-size: 15px;
+  }
+  .cmd-row .meta { opacity: .6; font-size: 12px; margin-left: 8px; }
+  .del { background: none; border: 0; cursor: pointer; color: #ff453a; font: 500 15px -apple-system, system-ui, sans-serif; }
+  .empty { opacity: .6; font-size: 14px; }
+  label { display: block; margin-bottom: 12px; font-size: 13px; opacity: .8; }
+  .field {
+    display: block; width: 100%; margin-top: 6px;
+    background: var(--tab); color: var(--fg); border: 0; border-radius: 10px;
+    padding: 10px 12px; font: 16px Menlo, "SF Mono", ui-monospace, monospace;
+    outline: none;
+  }
+  textarea.field { resize: vertical; min-height: 90px; }
+  .file-field { color: var(--fg); font-size: 15px; margin-top: 6px; }
+  .save {
+    width: 100%; margin-top: 4px; padding: 13px; border: 0; border-radius: 10px;
+    background: var(--accent); color: #000; font: 600 16px -apple-system, system-ui, sans-serif;
+    cursor: pointer; transition: transform .15s ease;
+  }
+  .save:active { transform: scale(.97); }
+  .msg { min-height: 1.2em; font-size: 13px; opacity: .6; margin: 10px 0 0; }
+
+  /* Theme grid */
+  .themes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .theme {
+    border: 2px solid transparent; border-radius: 12px; padding: 0; overflow: hidden;
+    background: none; cursor: pointer; color: inherit; text-align: left;
+    transition: transform .15s ease, border-color .2s ease;
+  }
+  .theme:active { transform: scale(.95); }
+  .theme.on { border-color: var(--accent); }
+  .theme .swatch { height: 52px; padding: 8px; font: 12px Menlo, monospace; line-height: 1.2; }
+  .theme .swatch b { font-weight: normal; }
+  .theme .name { display: block; padding: 6px 8px; font: 500 12px -apple-system, system-ui, sans-serif; background: var(--tab); color: var(--fg); }
+
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; font-size: 15px; margin-bottom: 12px; }
+  .toggle-row input { width: 22px; height: 22px; accent-color: var(--accent); }
+
+  body.no-anim *, body.no-anim .sheet, body.no-anim .line { animation: none !important; transition: none !important; }
+
+  /* Image popup */
+  #imgOverlay {
+    position: fixed; inset: 0; z-index: 30;
+    background: rgba(0,0,0,.85);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px;
+    animation: fadeIn .25s ease both;
+  }
+  #imgView { max-width: 100%; max-height: 75vh; border-radius: 12px; animation: pop .3s cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes pop { from { transform: scale(.9); opacity: 0; } to { transform: none; opacity: 1; } }
+  #imgClose {
+    margin-top: 18px; padding: 10px 28px; border: 0; border-radius: 10px;
+    background: var(--tab); color: var(--accent); font: 600 16px -apple-system, system-ui, sans-serif;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <button class="icon" aria-label="Keys">
+      <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M11.5 11.5 L21 21 M17 17 L19 15 M19.5 19.5 L21.5 17.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg>
+    </button>
+    <div class="title" id="titleText">Terminal</div>
+    <div class="controls">
+      <button class="icon" id="gearBtn" aria-label="Settings">
+        <svg width="22" height="22" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2.5l2.2 1.6 2.7-.3 1 2.5 2.4 1.3-.3 2.7 1.3 2.2-1.6 2.2.3 2.7-2.5 1-1.3 2.4-2.7-.3L12 21.5l-2.2-1.6-2.7.3-1-2.5-2.4-1.3.3-2.7L2.7 11.5l1.6-2.2-.3-2.7 2.5-1 1.3-2.4 2.7.3z"/><circle cx="12" cy="12" r="3.2"/></g></svg>
+      </button>
+      <button class="icon" id="plusBtn" aria-label="Add command">
+        <svg width="22" height="22" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+  </header>
+  <div id="row">
+    <span id="ps"></span>
+    <input id="in" type="text" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+  </div>
+  <div id="tab">iPhone:~ mobile%</div>
+  <div id="out"></div>
+</div>
+
+<!-- Settings -->
+<div id="settings" class="sheet hidden">
+  <div class="sheet-head">
+    <button class="link" id="doneBtn">Done</button>
+    <div class="title">Settings</div>
+    <span style="width:44px"></span>
+  </div>
+  <div class="sheet-body">
+
+    <h3>Theme</h3>
+    <div class="themes" id="themeGrid"></div>
+
+    <h3>Header text</h3>
+    <label>Shown at the top of the screen
+      <input class="field" id="headerText" type="text" maxlength="30" placeholder="Terminal">
+    </label>
+
+    <h3>Effects</h3>
+    <div class="toggle-row">
+      <span>Animations</span>
+      <input type="checkbox" id="animToggle">
+    </div>
+
+    <h3>Your commands</h3>
+    <div id="cmdList"></div>
+
+    <h3>Add command</h3>
+    <label>Command name
+      <input class="field" id="newName" type="text" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" placeholder="e.g. dabr">
+    </label>
+    <label>Shows
+      <select class="field" id="newType">
+        <option value="text">Text in terminal</option>
+        <option value="download">Download progress bar</option>
+        <option value="image">Image (printed slowly in terminal)</option>
+      </select>
+    </label>
+    <div id="textField">
+      <label>Output text
+        <textarea class="field" id="newText" placeholder="Downloading dabr...&#10;Done."></textarea>
+      </label>
+    </div>
+    <div id="downloadField" class="hidden">
+      <label>Progress bar style
+        <select class="field" id="barStyle"></select>
+      </label>
+      <label>Time to finish (seconds)
+        <input class="field" id="dlSeconds" type="number" min="1" max="60" step="1" value="3">
+      </label>
+      <label>Bar width (characters)
+        <input class="field" id="dlWidth" type="number" min="5" max="40" step="1" value="24">
+      </label>
+      <label>Size shown at the end (optional)
+        <input class="field" id="dlSize" type="text" maxlength="20" placeholder="e.g. 1.2 GB">
+      </label>
+    </div>
+    <div id="imageField" class="hidden">
+      <label>Image
+        <input class="file-field" id="newFile" type="file" accept="image/*">
+      </label>
+    </div>
+    <button class="save" id="saveBtn">Save Command</button>
+    <p class="msg" id="msg"></p>
+  </div>
+</div>
+
+<!-- Image popup -->
+<div id="imgOverlay" class="hidden">
+  <img id="imgView" alt="">
+  <button id="imgClose">Close</button>
+</div>
+
+<script>
+  const out = document.getElementById('out');
+  const inp = document.getElementById('in');
+  const ps  = document.getElementById('ps');
+  const PROMPT = 'iPhone:~ mobile% ';
+  ps.textContent = PROMPT;
+
+  const settings   = document.getElementById('settings');
+  const cmdList    = document.getElementById('cmdList');
+  const newName    = document.getElementById('newName');
+  const newType    = document.getElementById('newType');
+  const newText    = document.getElementById('newText');
+  const newFile    = document.getElementById('newFile');
+  const barStyle   = document.getElementById('barStyle');
+  const dlSeconds  = document.getElementById('dlSeconds');
+  const dlWidth    = document.getElementById('dlWidth');
+  const dlSize     = document.getElementById('dlSize');
+  const textField  = document.getElementById('textField');
+  const downloadField = document.getElementById('downloadField');
+  const imageField = document.getElementById('imageField');
+  const msg        = document.getElementById('msg');
+  const imgOverlay = document.getElementById('imgOverlay');
+  const imgView    = document.getElementById('imgView');
+  const titleText  = document.getElementById('titleText');
+  const headerText = document.getElementById('headerText');
+  const animToggle = document.getElementById('animToggle');
+  const themeGrid  = document.getElementById('themeGrid');
+
+  const CMD_KEY = 'newterm3.commands';
+  const THEME_KEY = 'newterm3.theme';
+  const TITLE_KEY = 'newterm3.title';
+  const ANIM_KEY = 'newterm3.anim';
+
+  /* ---------- Themes (30) ---------- */
+
+  const THEMES = [
+    { id: 'newterm',   name: 'NewTerm',        bg: '#1c1c1e', fg: '#e6e6e6', prompt: '#e6e6e6', accent: '#f5c518', bar: '#1c1c1e', tab: '#2c2c2e' },
+    { id: 'ubuntu',    name: 'Ubuntu',         bg: '#300a24', fg: '#eeeeec', prompt: '#8ae234', accent: '#e95420', bar: '#250820', tab: '#4a1537' },
+    { id: 'dracula',   name: 'Dracula',        bg: '#282a36', fg: '#f8f8f2', prompt: '#50fa7b', accent: '#bd93f9', bar: '#21222c', tab: '#44475a' },
+    { id: 'solarized', name: 'Solarized Dark', bg: '#002b36', fg: '#839496', prompt: '#859900', accent: '#268bd2', bar: '#073642', tab: '#094b58' },
+    { id: 'gruvbox',   name: 'Gruvbox',        bg: '#282828', fg: '#ebdbb2', prompt: '#b8bb26', accent: '#fe8019', bar: '#1d2021', tab: '#3c3836' },
+    { id: 'monokai',   name: 'Monokai',        bg: '#272822', fg: '#f8f8f2', prompt: '#a6e22e', accent: '#f92672', bar: '#1e1f1c', tab: '#3e3d32' },
+    { id: 'nord',      name: 'Nord',           bg: '#2e3440', fg: '#d8dee9', prompt: '#a3be8c', accent: '#88c0d0', bar: '#262c36', tab: '#3b4252' },
+    { id: 'onedark',   name: 'One Dark',       bg: '#282c34', fg: '#abb2bf', prompt: '#98c379', accent: '#61afef', bar: '#21252b', tab: '#2c313a' },
+    { id: 'tokyo',     name: 'Tokyo Night',    bg: '#1a1b26', fg: '#c0caf5', prompt: '#9ece6a', accent: '#7aa2f7', bar: '#16161e', tab: '#24283b' },
+    { id: 'material',  name: 'Material',       bg: '#263238', fg: '#eeffff', prompt: '#c3e88d', accent: '#82aaff', bar: '#1e272c', tab: '#37474f' },
+    { id: 'matrix',    name: 'Matrix',         bg: '#000000', fg: '#00ff41', prompt: '#00ff41', accent: '#00ff41', bar: '#000000', tab: '#0d1f0d' },
+    { id: 'cyberpunk', name: 'Cyberpunk',      bg: '#0d0221', fg: '#ff7edb', prompt: '#36f9f6', accent: '#fede5d', bar: '#140335', tab: '#261447' },
+    { id: 'amber',     name: 'Retro Amber',    bg: '#1a0f00', fg: '#ffb000', prompt: '#ffcc66', accent: '#ffb000', bar: '#120a00', tab: '#2e1c00' },
+    { id: 'ocean',     name: 'Ocean',          bg: '#0b1d2c', fg: '#cfe8f5', prompt: '#5eead4', accent: '#38bdf8', bar: '#081624', tab: '#132f45' },
+    { id: 'paper',     name: 'Paper',          bg: '#f5f1e8', fg: '#2b2b2b', prompt: '#1f6f43', accent: '#b5541c', bar: '#ebe5d6', tab: '#ddd5c2', light: true },
+    { id: 'catppuccin',name: 'Catppuccin',     bg: '#1e1e2e', fg: '#cdd6f4', prompt: '#a6e3a1', accent: '#89b4fa', bar: '#181825', tab: '#313244' },
+    { id: 'rosepine',  name: 'Rose Pine',      bg: '#191724', fg: '#e0def4', prompt: '#9ccfd8', accent: '#ebbcba', bar: '#1f1d2e', tab: '#26233a' },
+    { id: 'everforest',name: 'Everforest',     bg: '#2d353b', fg: '#d3c6aa', prompt: '#a7c080', accent: '#e69875', bar: '#272e33', tab: '#343f44' },
+    { id: 'kanagawa',  name: 'Kanagawa',       bg: '#1f1f28', fg: '#dcd7ba', prompt: '#98bb6c', accent: '#7e9cd8', bar: '#16161d', tab: '#2a2a37' },
+    { id: 'synthwave', name: 'Synthwave',      bg: '#262335', fg: '#ffffff', prompt: '#ff7edb', accent: '#fe4450', bar: '#1f1b2e', tab: '#34294f' },
+    { id: 'midnight',  name: 'Midnight',       bg: '#0f172a', fg: '#e2e8f0', prompt: '#4ade80', accent: '#60a5fa', bar: '#0b1120', tab: '#1e293b' },
+    { id: 'forest',    name: 'Forest',         bg: '#0f1f14', fg: '#d1fae5', prompt: '#86efac', accent: '#34d399', bar: '#0a160e', tab: '#17311f' },
+    { id: 'sunset',    name: 'Sunset',         bg: '#2b1b2e', fg: '#ffe8d6', prompt: '#ffb86b', accent: '#ff6b6b', bar: '#210f24', tab: '#3d2740' },
+    { id: 'coffee',    name: 'Coffee',         bg: '#2a1f1a', fg: '#f3e5d0', prompt: '#d4a373', accent: '#bc6c25', bar: '#21180f', tab: '#3d2e24' },
+    { id: 'hacker',    name: 'Hacker Green',   bg: '#050505', fg: '#39ff14', prompt: '#39ff14', accent: '#39ff14', bar: '#0a0a0a', tab: '#0f1a0f' },
+    { id: 'ice',       name: 'Ice',            bg: '#0a0f14', fg: '#b8e6ff', prompt: '#7dd3fc', accent: '#bae6fd', bar: '#070b0f', tab: '#112232' },
+    { id: 'arctic',    name: 'Arctic',         bg: '#eef6fb', fg: '#1e3a4c', prompt: '#0f766e', accent: '#0284c7', bar: '#dfeef7', tab: '#cde3ef', light: true },
+    { id: 'github',    name: 'GitHub Light',   bg: '#ffffff', fg: '#24292f', prompt: '#1a7f37', accent: '#0969da', bar: '#f6f8fa', tab: '#eaeef2', light: true },
+    { id: 'solarlight',name: 'Solarized Light',bg: '#fdf6e3', fg: '#586e75', prompt: '#859900', accent: '#268bd2', bar: '#eee8d5', tab: '#e4ddc8', light: true },
+    { id: 'bubblegum', name: 'Bubblegum',      bg: '#fff0f6', fg: '#5b2140', prompt: '#c2185b', accent: '#e91e63', bar: '#ffe0ef', tab: '#ffd1e6', light: true }
+  ];
+
+  function applyTheme(id) {
+    const t = THEMES.find((x) => x.id === id) || THEMES[0];
+    const s = document.documentElement.style;
+    s.setProperty('--bg', t.bg);
+    s.setProperty('--fg', t.fg);
+    s.setProperty('--prompt', t.prompt);
+    s.setProperty('--accent', t.accent);
+    s.setProperty('--bar', t.bar);
+    s.setProperty('--tab', t.tab);
+    s.colorScheme = t.light ? 'light' : 'dark';
+    document.querySelector('meta[name="theme-color"]').content = t.bg;
+    try { localStorage.setItem(THEME_KEY, t.id); } catch (e) {}
+    document.querySelectorAll('.theme').forEach((b) => b.classList.toggle('on', b.dataset.id === t.id));
+  }
+
+  function renderThemes() {
+    themeGrid.textContent = '';
+    THEMES.forEach((t) => {
+      const b = document.createElement('button');
+      b.className = 'theme';
+      b.dataset.id = t.id;
+      const sw = document.createElement('div');
+      sw.className = 'swatch';
+      sw.style.background = t.bg;
+      sw.style.color = t.fg;
+      sw.innerHTML = '<b style="color:' + t.prompt + '">$ </b>ls <span style="color:' + t.accent + '">-la</span>';
+      const nm = document.createElement('span');
+      nm.className = 'name';
+      nm.textContent = t.name;
+      b.appendChild(sw);
+      b.appendChild(nm);
+      b.addEventListener('click', () => applyTheme(t.id));
+      themeGrid.appendChild(b);
+    });
+  }
+
+  /* ---------- Download progress bar styles (15) ---------- */
+
+  const BAR_STYLES = [
+    { name: 'Classic',   f: '=', e: ' ', h: '>' },
+    { name: 'Blocks',    f: '█', e: '░', h: '' },
+    { name: 'Dots',      f: '●', e: '○', h: '' },
+    { name: 'Stars',     f: '*', e: '.', h: '' },
+    { name: 'Hash',      f: '#', e: '-', h: '' },
+    { name: 'Arrows',    f: '►', e: '·', h: '' },
+    { name: 'Squares',   f: '■', e: '□', h: '' },
+    { name: 'Dashes',    f: '━', e: '┄', h: '' },
+    { name: 'Pipes',     f: '|', e: ' ', h: '' },
+    { name: 'Hearts',    f: '♥', e: '♡', h: '' },
+    { name: 'Braille',   f: '⣿', e: '⣀', h: '' },
+    { name: 'Diamonds',  f: '◆', e: '◇', h: '' },
+    { name: 'Wave',      f: '~', e: '.', h: '' },
+    { name: 'Bolts',     f: '⚡', e: '·', h: '' },
+    { name: 'Plus',      f: '+', e: '-', h: '' }
+  ];
+
+  function fillBarStyles() {
+    barStyle.textContent = '';
+    BAR_STYLES.forEach((s, i) => {
+      const o = document.createElement('option');
+      o.value = String(i);
+      o.textContent = s.name;
+      barStyle.appendChild(o);
+    });
+  }
+
+  /* ---------- Header text and animations ---------- */
+
+  function applyTitle(text) {
+    const v = (text || '').trim() || 'Terminal';
+    titleText.textContent = v;
+    headerText.value = v === 'Terminal' ? '' : v;
+    try { localStorage.setItem(TITLE_KEY, v); } catch (e) {}
+  }
+
+  function applyAnim(on) {
+    document.body.classList.toggle('no-anim', !on);
+    animToggle.checked = on;
+    try { localStorage.setItem(ANIM_KEY, on ? '1' : '0'); } catch (e) {}
+  }
+
+  headerText.addEventListener('change', () => applyTitle(headerText.value));
+  animToggle.addEventListener('change', () => applyAnim(animToggle.checked));
+
+  /* ---------- Print helpers ---------- */
+
+  function print(text) {
+    const d = document.createElement('div');
+    d.className = 'line';
+    d.textContent = text;
+    out.appendChild(d);
+    out.scrollTop = out.scrollHeight;
+    return d;
+  }
+
+  function printBlock(text) {
+    String(text).split('\n').forEach((l) => print(l));
+  }
+
+  printBlock(
+    'Last login: ' + new Date(Date.now() - 3600e3).toString().slice(0, 24) + ' on ttys001\n' +
+    'Type a command.'
+  );
+
+  /* ---------- Saved commands ---------- */
+
+  function loadCmds() {
+    try { return JSON.parse(localStorage.getItem(CMD_KEY) || '[]'); }
+    catch (e) { return []; }
+  }
+
+  function saveCmds(list) {
+    try { localStorage.setItem(CMD_KEY, JSON.stringify(list)); return true; }
+    catch (e) { return false; }
+  }
+
+  function renderCmds() {
+    const list = loadCmds();
+    cmdList.textContent = '';
+    if (!list.length) {
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.textContent = 'No custom commands yet.';
+      cmdList.appendChild(e);
+      return;
+    }
+    list.forEach((c) => {
+      const row = document.createElement('div');
+      row.className = 'cmd-row';
+
+      const left = document.createElement('span');
+      left.textContent = c.name;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = c.type === 'image' ? 'image' : c.type === 'download' ? 'download' : 'text';
+      left.appendChild(meta);
+
+      const del = document.createElement('button');
+      del.className = 'del';
+      del.textContent = 'Delete';
+      del.addEventListener('click', () => {
+        saveCmds(loadCmds().filter((x) => x.name !== c.name));
+        renderCmds();
+      });
+
+      row.appendChild(left);
+      row.appendChild(del);
+      cmdList.appendChild(row);
+    });
+  }
+
+  function openSettings() {
+    renderThemes();
+    applyTheme(localStorage.getItem(THEME_KEY) || 'newterm');
+    renderCmds();
+    msg.textContent = '';
+    settings.classList.remove('hidden');
+  }
+
+  function closeSettings() {
+    settings.classList.add('hidden');
+  }
+
+  function updateTypeFields() {
+    const t = newType.value;
+    textField.classList.toggle('hidden', t !== 'text');
+    downloadField.classList.toggle('hidden', t !== 'download');
+    imageField.classList.toggle('hidden', t !== 'image');
+  }
+
+  // Shrink an image so it fits comfortably in device storage
+  function readImage(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const max = 800;
+          const s = Math.min(1, max / Math.max(img.width, img.height));
+          const c = document.createElement('canvas');
+          c.width = Math.round(img.width * s);
+          c.height = Math.round(img.height * s);
+          c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = reject;
+        img.src = fr.result;
+      };
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+  }
+
+  function addCommand(name, type, value) {
+    const list = loadCmds().filter((x) => x.name !== name);
+    list.push({ name, type, value });
+    if (!saveCmds(list)) {
+      msg.textContent = "Couldn't save. Storage may be full.";
+      return;
+    }
+    newName.value = '';
+    newText.value = '';
+    newFile.value = '';
+    msg.textContent = 'Saved. Type ' + name + ' in the terminal.';
+    renderCmds();
+  }
+
+  newType.addEventListener('change', updateTypeFields);
+
+  document.getElementById('saveBtn').addEventListener('click', async () => {
+    const raw = newName.value.trim();
+    if (!raw || /\s/.test(raw)) {
+      msg.textContent = 'Name can\u2019t be empty or contain spaces.';
+      return;
+    }
+    const name = raw.toLowerCase();
+    if (name === 'fastfetch') {
+      msg.textContent = 'fastfetch is built in. Pick another name.';
+      return;
+    }
+
+    const type = newType.value;
+    if (type === 'image') {
+      const file = newFile.files[0];
+      if (!file) { msg.textContent = 'Choose an image first.'; return; }
+      msg.textContent = 'Saving...';
+      try {
+        const data = await readImage(file);
+        addCommand(name, 'image', data);
+      } catch (e) {
+        msg.textContent = "Couldn't read that image.";
+      }
+    } else if (type === 'download') {
+      const seconds = Math.min(60, Math.max(1, Number(dlSeconds.value) || 3));
+      const width = Math.min(40, Math.max(5, Number(dlWidth.value) || 24));
+      const size = dlSize.value.trim();
+      addCommand(name, 'download', { style: Number(barStyle.value) || 0, seconds, width, size });
+    } else {
+      const text = newText.value;
+      if (!text.trim()) { msg.textContent = 'Enter some output text.'; return; }
+      addCommand(name, 'text', text);
+    }
+  });
+
+  document.getElementById('gearBtn').addEventListener('click', openSettings);
+  document.getElementById('plusBtn').addEventListener('click', () => {
+    openSettings();
+    newName.focus();
+  });
+  document.getElementById('doneBtn').addEventListener('click', closeSettings);
+
+  /* ---------- Image popup ---------- */
+
+  function showImage(src) {
+    imgView.src = src;
+    imgOverlay.classList.remove('hidden');
+  }
+
+  function hideImage() {
+    imgOverlay.classList.add('hidden');
+    inp.focus();
+  }
+
+  document.getElementById('imgClose').addEventListener('click', hideImage);
+  imgOverlay.addEventListener('click', (e) => {
+    if (e.target === imgOverlay) hideImage();
+  });
+
+  /* ---------- Download progress bar ---------- */
+
+  function barLine(name, pct, style, w, size) {
+    const running = pct < 100;
+    const filled = Math.round((pct * w) / 100);
+    const head = running && style.h ? style.h : '';
+    const fillLen = running && !head ? Math.max(0, filled - 1) : filled;
+    const body = style.f.repeat(fillLen) + (running && head ? head : '') +
+                 style.e.repeat(Math.max(0, w - fillLen - (running && head ? 1 : 0)));
+    return name + '  [' + body + '] ' + String(pct).padStart(3) + '%' + (size ? '  ' + size : '');
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function runDownload(name, opts) {
+    opts = opts || {};
+    const style = BAR_STYLES[opts.style] || BAR_STYLES[0];
+    const seconds = opts.seconds || 3;
+    const width = opts.width || 24;
+    const size = opts.size || '';
+    const steps = 25;
+    const delay = (seconds * 1000) / steps;
+    const line = print(barLine(name, 0, style, width, size));
+    for (let i = 1; i <= steps; i++) {
+      await sleep(delay);
+      const p = Math.round((i * 100) / steps);
+      line.textContent = barLine(name, p, style, width, size);
+      out.scrollTop = out.scrollHeight;
+    }
+    print('Done.');
+    inp.focus();
+  }
+
+  /* ---------- fastfetch ---------- */
+
+  const logo = [
+    '            .:\'',
+    '         __ :\'__',
+    '      .\'`  `-\'  ``.',
+    '     :            .\'',
+    '     :           :',
+    '      :         `-;',
+    '       `.__.-.__.\''
+  ];
+
+  const info = [
+    'mobile@iPhone',
+    '--------------',
+    'OS: iOS 27.0 arm64',
+    'Host: iPhone 12',
+    'Kernel: Darwin 27.0.0',
+    'Uptime: 4 days, 2 hours',
+    'Shell: zsh 5.9',
+    'Terminal: NewTerm 3 BETA',
+    'CPU: Apple A14 Bionic (6) @ 3.10 GHz',
+    'Memory: 2.31 GiB / 4.00 GiB'
+  ];
+
+  function fastfetch() {
+    const width = 30;
+    const lines = Math.max(logo.length, info.length);
+    let block = '';
+    for (let i = 0; i < lines; i++) {
+      const l = (logo[i] || '').padEnd(width, ' ');
+      const r = info[i] || '';
+      block += l + r + '\n';
+    }
+    printBlock(block.replace(/\n$/, ''));
+  }
+
+  /* ---------- Print an image inside the terminal, revealed top to bottom ---------- */
+
+  function printImage(src) {
+    const wrap = document.createElement('div');
+    wrap.className = 'line';
+    wrap.style.clipPath = 'inset(0 0 100% 0)';
+    const img = document.createElement('img');
+    img.alt = '';
+    img.style.display = 'block';
+    img.style.maxWidth = '100%';
+    img.style.borderRadius = '8px';
+    img.style.marginTop = '4px';
+    wrap.appendChild(img);
+    out.appendChild(wrap);
+
+    img.onload = () => {
+      const dur = 2800;
+      const start = performance.now();
+      function step(now) {
+        const t = Math.min(1, (now - start) / dur);
+        wrap.style.clipPath = 'inset(0 0 ' + ((1 - t) * 100).toFixed(2) + '% 0)';
+        out.scrollTop = out.scrollHeight;
+        if (t < 1) requestAnimationFrame(step);
+        else wrap.style.clipPath = 'none';
+      }
+      requestAnimationFrame(step);
+    };
+    img.onerror = () => { wrap.remove(); print("Couldn't display that image."); };
+    img.src = src;
+  }
+
+  /* ---------- Command runner ---------- */
+
+  function run(raw) {
+    const cmd = raw.trim();
+    print(PROMPT + raw);
+    if (cmd === '') return;
+
+    const first = cmd.split(/\s+/)[0];
+    const name = first.toLowerCase();
+
+    if (name === 'fastfetch') {
+      fastfetch();
+      return;
+    }
+
+    const custom = loadCmds().find((c) => c.name === name);
+    if (!custom) {
+      print('zsh: command not found: ' + first);
+      return;
+    }
+
+    if (custom.type === 'image') {
+      printImage(custom.value);
+    } else if (custom.type === 'download') {
+      runDownload(custom.name, custom.value);
+    } else {
+      printBlock(custom.value);
+    }
+  }
+
+  inp.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      run(inp.value);
+      inp.value = '';
+      out.scrollTop = out.scrollHeight;
+    }
+  });
+
+  // Refocus the terminal on taps, but not while a sheet or popup is open
+  document.addEventListener('click', () => {
+    if (settings.classList.contains('hidden') && imgOverlay.classList.contains('hidden')) {
+      inp.focus();
+    }
+  });
+
+  /* ---------- Startup ---------- */
+
+  (function init() {
+    let savedTheme = 'newterm', savedTitle = 'Terminal', savedAnim = '1';
+    try {
+      savedTheme = localStorage.getItem(THEME_KEY) || savedTheme;
+      savedTitle = localStorage.getItem(TITLE_KEY) || savedTitle;
+      savedAnim = localStorage.getItem(ANIM_KEY) || savedAnim;
+    } catch (e) {}
+    fillBarStyles();
+    applyTheme(savedTheme);
+    applyTitle(savedTitle);
+    applyAnim(savedAnim === '1');
+  })();
+
+  inp.focus();
+
+  /* ---------- Home-screen icon: black tile, >_ and yellow BETA pill ---------- */
+
+  (function makeIcon() {
+    const S = 180;
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const x = c.getContext('2d');
+
+    x.fillStyle = '#000';
+    x.fillRect(0, 0, S, S);
+
+    x.fillStyle = '#fff';
+    x.font = '600 64px Menlo, monospace';
+    x.textBaseline = 'alphabetic';
+    x.fillText('>_', 24, 84);
+
+    const px = 62, py = 108, pw = 100, ph = 40, r = 20;
+    x.fillStyle = '#f5c518';
+    x.beginPath();
+    x.moveTo(px + r, py);
+    x.arcTo(px + pw, py, px + pw, py + ph, r);
+    x.arcTo(px + pw, py + ph, px, py + ph, r);
+    x.arcTo(px, py + ph, px, py, r);
+    x.arcTo(px, py, px + pw, py, r);
+    x.closePath();
+    x.fill();
+
+    x.fillStyle = '#000';
+    x.font = '700 22px -apple-system, Helvetica, Arial, sans-serif';
+    x.textAlign = 'center';
+    x.textBaseline = 'middle';
+    x.fillText('BETA', px + pw / 2, py + ph / 2 + 1);
+
+    document.getElementById('icon').href = c.toDataURL('image/png');
+  })();
+</script>
+</body>
+</html>
